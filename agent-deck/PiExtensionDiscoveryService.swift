@@ -149,10 +149,16 @@ nonisolated struct PiExtensionDiscoveryService: @unchecked Sendable {
         let locations = resolvePackageExtensionLocations(packageDirectory: packageDirectory)
         return locations.flatMap { location -> [PiExtensionCandidate] in
             concreteExtensionLaunchSources(at: location).map { source in
-                PiExtensionCandidate(
-                    id: candidateID(for: source.standardizedFileURL.path),
-                    name: displayName(for: source.standardizedFileURL.path),
-                    launchSource: source.standardizedFileURL.path,
+                let path = source.standardizedFileURL.path
+                return PiExtensionCandidate(
+                    id: candidateID(for: path),
+                    // Prefer npm package name over folder segments like `src` / `extensions`.
+                    name: packageExtensionDisplayName(
+                        packageName: packageName,
+                        packageDirectory: packageDirectory,
+                        launchSource: path
+                    ),
+                    launchSource: path,
                     source: ScopeID(kind: .package, path: packageDirectory.path),
                     discoveryKind: .package,
                     packageName: packageName
@@ -165,12 +171,15 @@ nonisolated struct PiExtensionDiscoveryService: @unchecked Sendable {
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: location.path, isDirectory: &isDirectory) else { return [] }
         if !isDirectory.boolValue {
-            return location.pathExtension == "ts" ? [location] : []
+            return isExtensionEntryFile(location) ? [location] : []
         }
 
-        let index = location.appendingPathComponent("index.ts")
-        if fileManager.fileExists(atPath: index.path) {
-            return [index]
+        // Prefer TS, then JS (e.g. pi-blackhole ships `dist/index.js`).
+        for fileName in ["index.ts", "index.js", "index.mjs"] {
+            let index = location.appendingPathComponent(fileName)
+            if fileManager.fileExists(atPath: index.path) {
+                return [index]
+            }
         }
 
         guard let children = try? fileManager.contentsOfDirectory(at: location, includingPropertiesForKeys: nil) else { return [] }
@@ -178,11 +187,56 @@ nonisolated struct PiExtensionDiscoveryService: @unchecked Sendable {
             var childIsDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: child.path, isDirectory: &childIsDirectory) else { return [] }
             if childIsDirectory.boolValue {
-                let childIndex = child.appendingPathComponent("index.ts")
-                return fileManager.fileExists(atPath: childIndex.path) ? [childIndex] : []
+                for fileName in ["index.ts", "index.js", "index.mjs"] {
+                    let childIndex = child.appendingPathComponent(fileName)
+                    if fileManager.fileExists(atPath: childIndex.path) {
+                        return [childIndex]
+                    }
+                }
+                return []
             }
-            return child.pathExtension == "ts" ? [child] : []
+            return isExtensionEntryFile(child) ? [child] : []
         }
+    }
+
+    /// Whether a file path is a Pi-loadable extension entry (TS or JS).
+    ///
+    /// - Parameter url: Candidate file URL. Required.
+    /// - Returns: `true` for `.ts` / `.js` / `.mjs` sources.
+    private func isExtensionEntryFile(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        return ext == "ts" || ext == "js" || ext == "mjs"
+    }
+
+    /// Human label for a package-declared extension path.
+    ///
+    /// Uses the npm package base name (`pi-ocr`, `pi-fff`) instead of intermediate
+    /// folders (`extensions`, `src`, `dist`) that previously became the list title.
+    ///
+    /// - Parameters:
+    ///   - packageName: npm package name (`@scope/name` or bare). Required.
+    ///   - packageDirectory: Resolved package root. Required.
+    ///   - launchSource: Absolute path to the entry file. Required.
+    /// - Returns: Display name for the Extensions checklist.
+    private func packageExtensionDisplayName(
+        packageName: String,
+        packageDirectory: URL,
+        launchSource: String
+    ) -> String {
+        PiExtensionDisplayNaming.packageExtensionDisplayName(
+            packageName: packageName,
+            packageDirectory: packageDirectory,
+            launchSource: launchSource,
+            pathDisplayName: { displayName(for: $0) }
+        )
+    }
+
+    /// `@scope/name` → `name`; bare package → itself.
+    ///
+    /// - Parameter packageName: Full package name. Required.
+    /// - Returns: Unscoped base name for UI.
+    private func unscopedPackageBaseName(_ packageName: String) -> String {
+        PiExtensionDisplayNaming.unscopedPackageBaseName(packageName)
     }
 
     private struct ParsedSettings {
@@ -320,8 +374,18 @@ nonisolated struct PiExtensionDiscoveryService: @unchecked Sendable {
 
     private func displayName(for path: String) -> String {
         let url = URL(fileURLWithPath: path)
-        if url.lastPathComponent == "index.ts" {
-            return url.deletingLastPathComponent().lastPathComponent
+        let file = url.lastPathComponent.lowercased()
+        // index.* → parent folder, but skip non-descriptive parents (src/extensions/dist).
+        if file == "index.ts" || file == "index.js" || file == "index.mjs" {
+            var folder = url.deletingLastPathComponent()
+            let skip: Set<String> = ["src", "extensions", "dist", "lib", "build"]
+            while skip.contains(folder.lastPathComponent.lowercased()),
+                  folder.pathComponents.count > 1 {
+                let parent = folder.deletingLastPathComponent()
+                if parent.path == folder.path { break }
+                folder = parent
+            }
+            return folder.lastPathComponent
         }
         return url.deletingPathExtension().lastPathComponent
     }

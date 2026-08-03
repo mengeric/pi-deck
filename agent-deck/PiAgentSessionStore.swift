@@ -126,6 +126,11 @@ final class PiAgentSessionStore {
     private(set) var uiRequestsBySessionID: [UUID: PiAgentUIRequest] = [:]
     /// In-memory only: extension `notify` popups. Never written to transcript / disk.
     private(set) var extensionNotifiesBySessionID: [UUID: [PiAgentExtensionNotify]] = [:]
+    /// Live `setStatus` / `setWidget` chrome for the session footer strip. Not persisted.
+    private(set) var extensionChromeBySessionID: [UUID: PiAgentExtensionChrome] = [:]
+    /// Bumped when any session's extension chrome map changes so composer UI can
+    /// re-read without depending on dictionary identity observation alone.
+    private(set) var extensionChromeRevision: Int = 0
     private(set) var subagentRunsBySessionID: [UUID: [PiSubagentRunRecord]] = [:] {
         didSet { subagentRunsRevision &+= 1 }
     }
@@ -510,58 +515,60 @@ final class PiAgentSessionStore {
     }
 
     /// Max follow-ups waiting for the next idle drain (FIFO).
-    static let maxComposerMessageQueueCount = 5
+    static let maxComposerMessageQueueCount = ComposerMessageQueue.maxCount
 
     /// Whether another follow-up can be queued for this session.
     func canEnqueueComposerMessage(for sessionID: UUID) -> Bool {
-        composerMessageQueue(for: sessionID).count < Self.maxComposerMessageQueueCount
+        ComposerMessageQueue.canEnqueue(count: composerMessageQueue(for: sessionID).count)
     }
 
     /// Enqueues a follow-up when under capacity. Does not write to the transcript.
     /// - Returns: the item when accepted, or `nil` when the queue is full.
     @discardableResult
     func enqueueComposerMessage(_ item: PiAgentQueuedComposerMessage, for sessionID: UUID) -> PiAgentQueuedComposerMessage? {
-        var queue = composerMessageQueueBySessionID[sessionID] ?? []
-        guard queue.count < Self.maxComposerMessageQueueCount else { return nil }
-        queue.append(item)
-        composerMessageQueueBySessionID[sessionID] = queue
+        let current = composerMessageQueueBySessionID[sessionID] ?? []
+        guard let next = ComposerMessageQueue.enqueue(item, onto: current) else { return nil }
+        composerMessageQueueBySessionID[sessionID] = next
         return item
     }
 
     /// Puts an item back at the front of the queue (used when a drain race re-activates the session).
     /// Bypasses the capacity cap so a dequeued item is never dropped.
     func requeueComposerMessageAtFront(_ item: PiAgentQueuedComposerMessage, for sessionID: UUID) {
-        var queue = composerMessageQueueBySessionID[sessionID] ?? []
-        queue.removeAll { $0.id == item.id }
-        queue.insert(item, at: 0)
-        composerMessageQueueBySessionID[sessionID] = queue
+        let current = composerMessageQueueBySessionID[sessionID] ?? []
+        composerMessageQueueBySessionID[sessionID] = ComposerMessageQueue.requeueAtFront(
+            item, onto: current, id: item.id, idOf: \.id
+        )
     }
 
     /// Removes one queued item and returns it so the UI can restore the composer.
     @discardableResult
     func withdrawComposerMessage(id: UUID, for sessionID: UUID) -> PiAgentQueuedComposerMessage? {
-        guard var queue = composerMessageQueueBySessionID[sessionID] else { return nil }
-        guard let index = queue.firstIndex(where: { $0.id == id }) else { return nil }
-        let item = queue.remove(at: index)
-        if queue.isEmpty {
+        guard let current = composerMessageQueueBySessionID[sessionID],
+              let result = ComposerMessageQueue.withdraw(id: id, from: current, idOf: \.id) else {
+            return nil
+        }
+        if result.remaining.isEmpty {
             composerMessageQueueBySessionID.removeValue(forKey: sessionID)
         } else {
-            composerMessageQueueBySessionID[sessionID] = queue
+            composerMessageQueueBySessionID[sessionID] = result.remaining
         }
-        return item
+        return result.item
     }
 
     /// Pops the oldest queued message (FIFO) for delivery after idle.
     @discardableResult
     func dequeueComposerMessage(for sessionID: UUID) -> PiAgentQueuedComposerMessage? {
-        guard var queue = composerMessageQueueBySessionID[sessionID], !queue.isEmpty else { return nil }
-        let item = queue.removeFirst()
-        if queue.isEmpty {
+        guard let current = composerMessageQueueBySessionID[sessionID],
+              let result = ComposerMessageQueue.dequeueFirst(from: current) else {
+            return nil
+        }
+        if result.remaining.isEmpty {
             composerMessageQueueBySessionID.removeValue(forKey: sessionID)
         } else {
-            composerMessageQueueBySessionID[sessionID] = queue
+            composerMessageQueueBySessionID[sessionID] = result.remaining
         }
-        return item
+        return result.item
     }
 
     func clearComposerMessageQueue(for sessionID: UUID) {
@@ -672,6 +679,7 @@ final class PiAgentSessionStore {
         transcriptRevisionsBySessionID[record.id] = 0
         uiRequestsBySessionID[record.id] = nil
         extensionNotifiesBySessionID[record.id] = nil
+        extensionChromeBySessionID[record.id] = nil
         subagentRunsBySessionID[record.id] = []
         supervisorRequestsBySessionID[record.id] = []
         sessionPlansBySessionID[record.id] = nil
@@ -798,6 +806,7 @@ final class PiAgentSessionStore {
         transcriptRevisionsBySessionID[record.id] = 0
         uiRequestsBySessionID[record.id] = nil
         extensionNotifiesBySessionID[record.id] = nil
+        extensionChromeBySessionID[record.id] = nil
         subagentRunsBySessionID[record.id] = []
         supervisorRequestsBySessionID[record.id] = []
         sessionPlansBySessionID[record.id] = nil
@@ -890,6 +899,7 @@ final class PiAgentSessionStore {
         transcriptRevisionsBySessionID[record.id] = 0
         uiRequestsBySessionID[record.id] = nil
         extensionNotifiesBySessionID[record.id] = nil
+        extensionChromeBySessionID[record.id] = nil
         subagentRunsBySessionID[record.id] = []
         supervisorRequestsBySessionID[record.id] = []
         sessionPlansBySessionID[record.id] = nil
@@ -1066,6 +1076,65 @@ final class PiAgentSessionStore {
     /// - Parameter sessionID: Owning session. Required.
     func clearExtensionNotifies(sessionID: UUID) {
         extensionNotifiesBySessionID[sessionID] = nil
+    }
+
+    /// Extension footer chrome for a session (statuses + widgets).
+    ///
+    /// - Parameter sessionID: Owning session. Required.
+    /// - Returns: Chrome snapshot, or empty chrome when none.
+    func extensionChrome(for sessionID: UUID) -> PiAgentExtensionChrome {
+        extensionChromeBySessionID[sessionID] ?? PiAgentExtensionChrome()
+    }
+
+    /// Selected session's extension chrome for the composer strip.
+    var selectedExtensionChrome: PiAgentExtensionChrome {
+        guard let id = selectedSessionID else { return PiAgentExtensionChrome() }
+        return extensionChrome(for: id)
+    }
+
+    /// Upsert or clear a `setStatus` slot (Pi TUI footer status).
+    ///
+    /// - Parameters:
+    ///   - sessionID: Owning Deck session. Required.
+    ///   - key: Status key from the extension. Required; empty keys are ignored.
+    ///   - text: Display text; empty / whitespace clears the key.
+    func applyExtensionSetStatus(sessionID: UUID, key: String, text: String) {
+        guard !deletedSessionIDs.contains(sessionID) else { return }
+        var chrome = extensionChromeBySessionID[sessionID] ?? PiAgentExtensionChrome()
+        guard chrome.applySetStatus(key: key, text: text) else { return }
+        if chrome.isEmpty {
+            extensionChromeBySessionID[sessionID] = nil
+        } else {
+            extensionChromeBySessionID[sessionID] = chrome
+        }
+        extensionChromeRevision &+= 1
+    }
+
+    /// Upsert or clear a `setWidget` slot (Pi TUI footer widget).
+    ///
+    /// - Parameters:
+    ///   - sessionID: Owning Deck session. Required.
+    ///   - key: Widget key from the extension. Required; empty keys are ignored.
+    ///   - lines: Display lines; all-empty clears the key.
+    func applyExtensionSetWidget(sessionID: UUID, key: String, lines: [String]) {
+        guard !deletedSessionIDs.contains(sessionID) else { return }
+        var chrome = extensionChromeBySessionID[sessionID] ?? PiAgentExtensionChrome()
+        guard chrome.applySetWidget(key: key, lines: lines) else { return }
+        if chrome.isEmpty {
+            extensionChromeBySessionID[sessionID] = nil
+        } else {
+            extensionChromeBySessionID[sessionID] = chrome
+        }
+        extensionChromeRevision &+= 1
+    }
+
+    /// Drop all extension footer chrome for a session.
+    ///
+    /// - Parameter sessionID: Owning session. Required.
+    func clearExtensionChrome(sessionID: UUID) {
+        guard extensionChromeBySessionID[sessionID] != nil else { return }
+        extensionChromeBySessionID[sessionID] = nil
+        extensionChromeRevision &+= 1
     }
 
     func subagentRuns(for sessionID: UUID) -> [PiSubagentRunRecord] {
@@ -3121,6 +3190,7 @@ final class PiAgentSessionStore {
             processingActivityBySessionID[sessionID] = nil
             uiRequestsBySessionID[sessionID] = nil
             extensionNotifiesBySessionID[sessionID] = nil
+            extensionChromeBySessionID[sessionID] = nil
             composerMessageQueueBySessionID[sessionID] = nil
             clearComposerDraft(for: sessionID)
             deleteGeneralChatScratchFolders(for: sessionID)

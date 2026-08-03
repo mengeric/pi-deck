@@ -1521,6 +1521,90 @@ enum PiAgentProcessingActivity: Equatable, Hashable {
     case applyingConfigurationChange(summary: String)
 }
 
+/// Per-session extension footer chrome (`setStatus` / `setWidget`).
+///
+/// Mirrors Pi TUI status-bar slots: keyed maps that overwrite in place.
+/// In-memory only — not persisted; extensions re-push on the next session turn.
+struct PiAgentExtensionChrome: Equatable, Hashable {
+    /// `setStatus` key → display text. Empty text removes the key.
+    var statuses: [String: String] = [:]
+    /// `setWidget` key → display lines. Empty lines remove the key.
+    var widgets: [String: [String]] = [:]
+
+    /// Whether the chrome strip should render anything.
+    var isEmpty: Bool { statuses.isEmpty && widgets.isEmpty }
+
+    /// Flattened status chips sorted by key for stable UI order.
+    ///
+    /// - Returns: `(key, text)` pairs with non-empty text.
+    var statusItems: [(key: String, text: String)] {
+        statuses
+            .map { (key: $0.key, text: $0.value) }
+            .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
+    }
+
+    /// Flattened widget blocks sorted by key.
+    ///
+    /// - Returns: `(key, lines)` with at least one non-empty line.
+    var widgetItems: [(key: String, lines: [String])] {
+        widgets
+            .map { (key: $0.key, lines: $0.value) }
+            .filter { item in
+                item.lines.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            }
+            .sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
+    }
+
+    /**
+     Applies a `setStatus` mutation.
+
+     - Parameters:
+       - key: Status key. Empty keys are no-ops.
+       - text: Display text; empty clears the key.
+     - Returns: `true` when chrome content changed.
+     */
+    @discardableResult
+    mutating func applySetStatus(key: String, text: String) -> Bool {
+        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else { return false }
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedText.isEmpty {
+            guard statuses[trimmedKey] != nil else { return false }
+            statuses.removeValue(forKey: trimmedKey)
+            return true
+        }
+        if statuses[trimmedKey] == trimmedText { return false }
+        statuses[trimmedKey] = trimmedText
+        return true
+    }
+
+    /**
+     Applies a `setWidget` mutation.
+
+     - Parameters:
+       - key: Widget key. Empty keys are no-ops.
+       - lines: Lines; all-empty clears the key.
+     - Returns: `true` when chrome content changed.
+     */
+    @discardableResult
+    mutating func applySetWidget(key: String, lines: [String]) -> Bool {
+        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else { return false }
+        let cleaned = lines
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if cleaned.isEmpty {
+            guard widgets[trimmedKey] != nil else { return false }
+            widgets.removeValue(forKey: trimmedKey)
+            return true
+        }
+        if widgets[trimmedKey] == cleaned { return false }
+        widgets[trimmedKey] = cleaned
+        return true
+    }
+}
+
 /// Ephemeral extension notification (`ctx.ui.notify` / RPC `method: "notify"`).
 /// Not part of the session transcript and never persisted to disk.
 struct PiAgentExtensionNotify: Identifiable, Hashable {

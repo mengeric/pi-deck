@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Runtime → Extensions. Controls whether the user's own Pi extensions load into
@@ -173,6 +174,18 @@ struct ExtensionsScreen: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                // Web search: one-click open ~/.pi/web-search.json (create stub if missing).
+                if bridge.id == "web_exa" {
+                    Button {
+                        openWebSearchConfigFile()
+                    } label: {
+                        Label(languageStore.t("ext.bridge.webSearch.openConfig"), systemImage: "doc.text")
+                            .font(AppTheme.Font.micro.weight(.semibold))
+                    }
+                    .buttonStyle(.borderless)
+                    .help(languageStore.t("ext.bridge.webSearch.openConfigHelp"))
+                    .padding(.top, 2)
+                }
             }
 
             Spacer(minLength: 8)
@@ -180,6 +193,20 @@ struct ExtensionsScreen: View {
         }
         .padding(.vertical, 12)
         .opacity(isActive ? 1 : 0.55)
+    }
+
+    /// Ensure `~/.pi/web-search.json` exists (create stub if missing), then open it.
+    ///
+    /// - Note: Missing file → create template with empty key fields; existing file is never overwritten.
+    private func openWebSearchConfigFile() {
+        do {
+            let result = try PiNativeSubagentBridgeExtensions.ensureWebSearchConfigFile()
+            NSWorkspace.shared.open(result.url)
+        } catch {
+            NSLog("[Extensions] open web-search config failed: \(error.localizedDescription)")
+            // Last resort: still try to open the expected path (may fail if create failed).
+            NSWorkspace.shared.open(PiNativeSubagentBridgeExtensions.webSearchConfigURL())
+        }
     }
 
     // MARK: - User extension checklist
@@ -285,6 +312,17 @@ private struct PiExtensionSelectionRow: View {
             }
             .appCheckbox()
             .opacity(!conflictingToolNames.isEmpty ? 0.6 : 1.0)
+
+            // npm package identity (when path-derived name used to be `src` / `extensions`).
+            if let packageName = candidate.packageName,
+               !packageName.isEmpty,
+               packageName.caseInsensitiveCompare(candidate.name) != .orderedSame {
+                Text(packageName)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(AppTheme.mutedText)
+                    .lineLimit(1)
+                    .padding(.leading, 22)
+            }
 
             Text(candidate.launchSource)
                 .font(.caption)

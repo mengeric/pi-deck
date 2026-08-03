@@ -110,10 +110,10 @@
 "agent.commitAndPushAlertTitle" = "提交并推送全部更改？";
 "agent.commitAndPushAlertConfirm" = "提交并推送全部更改";
 "agent.mergeAlertTitle" = "合并会话分支？";
-"agent.resumeTerminal" = "在终端继续";
-"agent.resumeTerminalAlertTitle" = "在终端继续？";
-"agent.resumeTerminalHelp" = "从该会话文件打开终端续写。终端中的消息目前不会同步回 %@。";
-"agent.resumeTerminalMessage" = "将从会话文件打开并行终端续写。在终端发送的消息目前不会同步回 %@。";
+"agent.resumeTerminal" = "打开终端";
+"agent.resumeTerminalAlertTitle" = "打开终端？";
+"agent.resumeTerminalHelp" = "在已配置的终端中打开当前会话的项目目录，不会恢复 Pi 会话。";
+"agent.resumeTerminalMessage" = "仅在项目目录打开终端。";
 
 /* MARK: - Sessions */
 "session.searchAll" = "搜索全部会话";
@@ -508,9 +508,6 @@
 "mcp.assignAfterSave" = "保存后可将此服务器分配到项目或代理。";
 "mcp.scanning" = "正在扫描已知配置文件…";
 "mcp.noForeignFound" = "未找到尚未加入 %@ 的 Claude 或 Codex MCP 服务器。";
-"mcp.computerUse" = "Computer Use 控制";
-"mcp.chatgptRunning" = "ChatGPT：运行中";
-"mcp.chatgptNotRunning" = "ChatGPT：未运行";
 "mcp.openChatGPT" = "打开 ChatGPT";
 "mcp.generalChat" = "通用对话";
 "mcp.deckBuilder" = "Agent Deck 构建器";
@@ -901,7 +898,7 @@
 "menu.previousSession" = "上一个会话";
 "menu.stopSession" = "停止会话";
 "menu.deleteSession" = "删除会话";
-"menu.resumeTerminal" = "在终端中恢复";
+"menu.resumeTerminal" = "打开终端";
 "menu.openAgentFile" = "打开 Agent 文件";
 "menu.revealAgent" = "在 Finder 中显示 Agent";
 "menu.enableAgent" = "启用 Agent";
@@ -942,7 +939,7 @@
 "shortcut.nextQuestion.desc" = "在 Pi Agent 记录聚焦时跳到下一条用户提问。";
 "shortcut.stopSession.desc" = "停止当前运行中的会话。";
 "shortcut.deleteSession.desc" = "删除所选会话。";
-"shortcut.resumeTerminal.desc" = "在已配置的终端中恢复所选会话。";
+"shortcut.resumeTerminal.desc" = "在已配置的终端中打开所选会话的项目目录。";
 "shortcut.dictation" = "开始 Composer 听写";
 "shortcut.dictation.desc" = "在聚焦的 Pi Agent 输入框启动 macOS 听写。";
 "shortcut.newAgent.desc" = "创建自定义 Agent。";
@@ -1478,9 +1475,6 @@
 "agents.defaultProgress" = "默认进度";
 "agents.interactive" = "交互";
 "agents.maxSubagentDepth" = "最大子代理深度";
-"mcp.chatgptHint" = "ChatGPT 须在运行、已登录，且账号可用 Computer Use。";
-"mcp.computerUseTools" = "可用工具：list_apps、get_app_state、click、perform_secondary_action、set_value、select_option、scroll、type_text、open_app、wait。";
-"mcp.computerUseAuthority" = "自动授权：分配 Computer Use 后，该范围内的会话可使用上述全部十种方法。";
 "mcp.noProjectHint" = "无项目聊天不会继承「全部项目」、项目、默认或 Agent 的 MCP 分配。这些服务器在分配给无项目会话前保持关闭。";
 "mcp.trustHint" = "仅对你信任可控制本机的项目、Agent 或无项目模式启用。未分配范围保持拦截。";
 "mcp.removeConfirm" = "将从 ~/.pi/agent/mcp.json 移除“%@”，并清除所有项目与 Agent 分配。";
@@ -1709,10 +1703,6 @@
 "agent.earlierTitle" = "更早的 Transcript";
 "agent.earlierBody" = "最新 %d 条可见项之前的消息。";
 "agent.loopUnavailable" = "Loop 不可用";
-"agent.chatgptStartTitle" = "启动 ChatGPT 以使用 Computer Use";
-"agent.chatgptStartBody" = "可立即打开 ChatGPT，或继续而不打开。";
-"agent.continueWithoutOpening" = "不打开并继续";
-"agent.openChatgpt" = "打开 ChatGPT";
 "agents.renameAgent" = "重命名 Agent %@";
 "agents.editNamed" = "编辑 %@";
 "agents.missingSkillsHere" = "此处缺少技能：%@";
@@ -1772,7 +1762,6 @@
 "transcript.previewUnavailable" = "此文件类型不支持预览。";
 "transcript.finalRuntimeSystemPrompt" = "最终运行时系统提示";
 "transcript.openDetails" = "打开详情";
-"mcp.chatgptRequired" = "ChatGPT 须在运行、已登录，且账号可用 Computer Use。";
 "mcp.remoteHttp" = "远程 (HTTP)";
 "mcp.optional" = "可选";
 "mcp.optionalSpaceSeparated" = "可选，空格分隔";
@@ -1823,7 +1812,6 @@
 "agent.loadEarlier" = "加载更早";
 "agent.earlierItemsFmt" = "%d 条更早项，时间在 %@ 之前";
 "agent.showingLatestFmt" = "显示最新 %d 条以保持聊天流畅。另有 %d 条更早项可在上方查看。";
-"agent.chatgptMustRunning" = "此会话已启用受信任 Computer Use。使用前须运行 ChatGPT 并登录合格账号。";
 "agent.loopSaved" = "Loop 已保存";
 "agent.loopSavedBody" = "已将 loop 保存到 Loop 库。";
 "agents.removeAvatar" = "移除头像";
@@ -2131,7 +2119,6 @@
 "vm.choosePiExtension" = "选择包含 pi.registerCommand(...) 的 Pi 扩展文件。";
 "vm.skillsAllUpToDate" = "所有已同步技能均为最新。";
 "vm.skillsNoUpdateNeeded" = "没有需要更新的技能。";
-"vm.skillsRemovedCodexComputerUse" = "已移除过时的 Codex Computer Use 技能引用。请改从 MCP Servers 启用 Computer Use。";
 "vm.syncedGitSkillCollection" = "已同步的 Git 技能集合";
 "vm.localSkillCollection" = "本地技能集合";
 "vm.generalChat" = "通用聊天";
@@ -2145,7 +2132,8 @@
 "vm.enterCommitTitle" = "请先输入提交标题。";
 "vm.providersLoadFailed" = "无法从 Pi 加载提供方。请更新或重装 Pi 后重试。";
 "vm.piAgentNeedsReview" = "Pi Agent 需要审阅";
-"vm.openedInTerminal" = "已在终端打开";
+"vm.openedInTerminal" = "已在终端打开项目目录";
+"vm.projectDirectoryMissing" = "项目目录不存在或不是文件夹。";
 "vm.sessionFileMissing" = "Pi 会话文件已不存在；若可用将尝试会话 id。";
 "vm.terminalAppMissing" = "所选终端应用已不存在。请在设置中选择其他应用。";
 "vm.couldNotLaunchApp" = "无法启动 %@：%@";
@@ -2405,3 +2393,7 @@
 "composer.queue.withdrawHelp" = "从队列移除并填回输入框";
 "composer.queue.full" = "队列已满（最多 %d 条）。请撤回一条，或等本轮结束后再发送。";
 "composer.queue.fullHint" = "已满 · 最多 %d 条 — 撤回后可继续排队";
+"extensionChrome.a11y" = "扩展状态";
+"extensionChrome.moreLines" = "另有 %d 行";
+"ext.bridge.webSearch.openConfig" = "打开 / 创建配置文件";
+"ext.bridge.webSearch.openConfigHelp" = "打开 ~/.pi/web-search.json；若不存在则先创建模板再打开。";

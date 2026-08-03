@@ -110,10 +110,10 @@
 "agent.commitAndPushAlertTitle" = "Commit and push all changes?";
 "agent.commitAndPushAlertConfirm" = "Commit & Push All Changes";
 "agent.mergeAlertTitle" = "Merge session branch?";
-"agent.resumeTerminal" = "Resume in Terminal";
-"agent.resumeTerminalAlertTitle" = "Resume in Terminal?";
-"agent.resumeTerminalHelp" = "Opens a terminal continuation from this session file. Terminal messages do not sync back into %@ yet.";
-"agent.resumeTerminalMessage" = "This opens a parallel terminal continuation from the session file. Messages sent in Terminal do not sync back into %@ yet.";
+"agent.resumeTerminal" = "Open Terminal";
+"agent.resumeTerminalAlertTitle" = "Open Terminal?";
+"agent.resumeTerminalHelp" = "Opens your configured terminal in this session’s project directory. Does not resume the Pi session.";
+"agent.resumeTerminalMessage" = "Opens a terminal at the project directory only.";
 
 /* MARK: - Sessions */
 "session.searchAll" = "Search all sessions";
@@ -508,9 +508,6 @@
 "mcp.assignAfterSave" = "Assign this server to your projects or agents after saving.";
 "mcp.scanning" = "Scanning known config files…";
 "mcp.noForeignFound" = "No Claude or Codex MCP servers were found that are not already in %@.";
-"mcp.computerUse" = "Computer Use controls";
-"mcp.chatgptRunning" = "ChatGPT: Running";
-"mcp.chatgptNotRunning" = "ChatGPT: Not running";
 "mcp.openChatGPT" = "Open ChatGPT";
 "mcp.generalChat" = "General Chat";
 "mcp.deckBuilder" = "Agent Deck Builder";
@@ -902,7 +899,7 @@
 "menu.previousSession" = "Previous Session";
 "menu.stopSession" = "Stop Session";
 "menu.deleteSession" = "Delete Session";
-"menu.resumeTerminal" = "Resume in Terminal";
+"menu.resumeTerminal" = "Open Terminal";
 "menu.openAgentFile" = "Open Agent File";
 "menu.revealAgent" = "Reveal Agent in Finder";
 "menu.enableAgent" = "Enable Agent";
@@ -943,7 +940,7 @@
 "shortcut.nextQuestion.desc" = "Jump to the next user question when the Pi Agent transcript is focused.";
 "shortcut.stopSession.desc" = "Stop the currently running session.";
 "shortcut.deleteSession.desc" = "Delete the selected session.";
-"shortcut.resumeTerminal.desc" = "Resume the selected session in your configured terminal.";
+"shortcut.resumeTerminal.desc" = "Open the configured terminal in the selected session’s project directory.";
 "shortcut.dictation" = "Start Composer Dictation";
 "shortcut.dictation.desc" = "Start macOS Dictation in the focused Pi Agent composer.";
 "shortcut.newAgent.desc" = "Create a new custom agent.";
@@ -1479,9 +1476,6 @@
 "agents.defaultProgress" = "Default progress";
 "agents.interactive" = "Interactive";
 "agents.maxSubagentDepth" = "Max Subagent Depth";
-"mcp.chatgptHint" = "ChatGPT must be running, signed in, and have Computer Use available for the account.";
-"mcp.computerUseTools" = "Available tools: list_apps, get_app_state, click, perform_secondary_action, set_value, select_option, scroll, type_text, open_app, wait.";
-"mcp.computerUseAuthority" = "Automatic authority: assigning Computer Use gives sessions in this scope access to all ten methods above.";
 "mcp.noProjectHint" = "No-project chats never inherit All Projects, project, default, or agent MCP assignments. These servers stay off until assigned to No-project sessions.";
 "mcp.trustHint" = "Enable it only for projects, agents, or no-project modes you trust to control this Mac. Unassigned scopes stay blocked.";
 "mcp.removeConfirm" = "Remove “%@” from ~/.pi/agent/mcp.json and clear it from every project and agent assignment.";
@@ -1710,10 +1704,6 @@
 "agent.earlierTitle" = "Earlier Transcript";
 "agent.earlierBody" = "Messages before the latest %d visible items.";
 "agent.loopUnavailable" = "Loop Unavailable";
-"agent.chatgptStartTitle" = "Start ChatGPT for Computer Use";
-"agent.chatgptStartBody" = "You can open ChatGPT now, or continue without opening it.";
-"agent.continueWithoutOpening" = "Continue Without Opening";
-"agent.openChatgpt" = "Open ChatGPT";
 "agents.renameAgent" = "Rename agent %@";
 "agents.editNamed" = "Edit %@";
 "agents.missingSkillsHere" = "Missing skills here: %@";
@@ -1773,7 +1763,6 @@
 "transcript.previewUnavailable" = "Preview is not available for this file type.";
 "transcript.finalRuntimeSystemPrompt" = "Final Runtime System Prompt";
 "transcript.openDetails" = "Open Details";
-"mcp.chatgptRequired" = "ChatGPT must be running, signed in, and have Computer Use available for the account.";
 "mcp.remoteHttp" = "Remote (HTTP)";
 "mcp.optional" = "Optional";
 "mcp.optionalSpaceSeparated" = "Optional, space-separated";
@@ -1824,7 +1813,6 @@
 "agent.loadEarlier" = "Load Earlier";
 "agent.earlierItemsFmt" = "%d earlier items before %@";
 "agent.showingLatestFmt" = "Showing the latest %d items to keep this chat responsive. %d earlier items stay available above.";
-"agent.chatgptMustRunning" = "This session has trusted Computer Use enabled. ChatGPT must be running and signed in to an eligible account before Computer Use can be used.";
 "agent.loopSaved" = "Loop Saved";
 "agent.loopSavedBody" = "Saved loop to Loop Bank.";
 "agents.removeAvatar" = "Remove avatar image";
@@ -2132,7 +2120,6 @@
 "vm.choosePiExtension" = "Choose a Pi extension file containing pi.registerCommand(...).";
 "vm.skillsAllUpToDate" = "All synced skills are up to date.";
 "vm.skillsNoUpdateNeeded" = "No skills needed updating.";
-"vm.skillsRemovedCodexComputerUse" = "Removed the obsolete Codex Computer Use skill reference. Enable Computer Use from MCP Servers instead.";
 "vm.syncedGitSkillCollection" = "Synced Git skill collection";
 "vm.localSkillCollection" = "Local skill collection";
 "vm.generalChat" = "General Chat";
@@ -2146,7 +2133,8 @@
 "vm.enterCommitTitle" = "Enter a commit title first.";
 "vm.providersLoadFailed" = "Couldn’t load providers from Pi. Update or reinstall Pi, then try again.";
 "vm.piAgentNeedsReview" = "Pi Agent needs review";
-"vm.openedInTerminal" = "Opened in Terminal";
+"vm.openedInTerminal" = "Opened project folder in Terminal";
+"vm.projectDirectoryMissing" = "Project directory is missing or not a folder.";
 "vm.sessionFileMissing" = "Pi session file no longer exists; trying session id if available.";
 "vm.terminalAppMissing" = "Selected terminal app no longer exists. Choose another app in Settings.";
 "vm.couldNotLaunchApp" = "Could not launch %@: %@";
@@ -2406,3 +2394,7 @@
 "composer.queue.withdrawHelp" = "Remove from queue and put the text back in the composer";
 "composer.queue.full" = "Queue is full (max %d). Withdraw one, or wait until a turn finishes.";
 "composer.queue.fullHint" = "Full · max %d — withdraw to add more";
+"extensionChrome.a11y" = "Extension status";
+"extensionChrome.moreLines" = "+%d more";
+"ext.bridge.webSearch.openConfig" = "Open / create config file";
+"ext.bridge.webSearch.openConfigHelp" = "Open ~/.pi/web-search.json. If the file does not exist, create a stub template first.";
