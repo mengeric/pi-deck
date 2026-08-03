@@ -844,8 +844,13 @@ struct PiAgentDropSafeTextEditor: NSViewRepresentable {
             let folders = urls.filter { PiAgentFolderAttachment(url: $0) != nil }
             let nonFolderURLs = urls.filter { PiAgentFolderAttachment(url: $0) == nil }
             let pathImages = nonFolderURLs.compactMap { PiAgentComposerImageLoader.imageAttachment(fromFileURL: $0) }
-            let files = nonFolderURLs.filter { PiAgentComposerImageLoader.imageAttachment(fromFileURL: $0) == nil }
-            // Bitmap-only clipboard (screenshots) still come from imagesFromPasteboard.
+            // Ignore ghost file-urls that are not on disk — they used to make handleDrop
+            // return true and swallow Cmd+V without attaching a bitmap image.
+            let files = nonFolderURLs.filter { url in
+                guard PiAgentComposerImageLoader.imageAttachment(fromFileURL: url) == nil else { return false }
+                return FileManager.default.fileExists(atPath: url.path)
+            }
+            // Bitmap-only clipboard (screenshots, browser "Copy Image", JPEG producers).
             // Call the bitmap-only path so we don't re-walk file URLs twice.
             let clipboardImages = PiAgentComposerImageLoader.bitmapImagesFromPasteboard(pasteboard)
             let images = pathImages + clipboardImages
@@ -854,9 +859,15 @@ struct PiAgentDropSafeTextEditor: NSViewRepresentable {
                 // Plain text (or nothing attachable) — let the text paste path handle it.
                 return false
             }
-            parent.onImages(images)
-            parent.onFiles(files)
-            parent.onFolders(folders)
+            if !images.isEmpty {
+                parent.onImages(images)
+            }
+            if !files.isEmpty {
+                parent.onFiles(files)
+            }
+            if !folders.isEmpty {
+                parent.onFolders(folders)
+            }
             return true
         }
 
@@ -1221,17 +1232,108 @@ enum PiAgentComposerImageLoader {
         return attachments
     }
 
-    /// PNG/TIFF clipboard bitmaps only (no file-URL walk).
+    /// Raster images from the pasteboard only (no file-URL walk).
+    ///
+    /// Supports PNG / JPEG / TIFF pasteboard types and falls back to `NSImage`
+    /// object reads for producers that do not publish raw image bytes under the
+    /// standard UTIs (some chat apps, older AppKit clients).
+    ///
+    /// - Parameter pasteboard: Source pasteboard (tests should use a private name).
+    /// - Returns: At most one processed attachment (Pi CLI image limit path).
     nonisolated static func bitmapImagesFromPasteboard(_ pasteboard: NSPasteboard) -> [PiAgentImageAttachment] {
-        if let data = pasteboard.data(forType: .png),
-           let attachment = imageAttachment(data: data, name: "pasted-image.png", mimeType: "image/png", fileReference: "pasted-image.png") {
-            return [attachment]
+        let jpegType = NSPasteboard.PasteboardType("public.jpeg")
+        let jpgType = NSPasteboard.PasteboardType("public.jpg")
+
+        // 1) Declared image data types (stable bytes for screenshots / browser copy).
+        let typed: [(NSPasteboard.PasteboardType, String, String)] = [
+            (.png, "image/png", "pasted-image.png"),
+            (jpegType, "image/jpeg", "pasted-image.jpg"),
+            (jpgType, "image/jpeg", "pasted-image.jpg"),
+            (.tiff, "image/tiff", "pasted-image.png")
+        ]
+        for (type, mimeType, name) in typed {
+            guard let data = pasteboard.data(forType: type), !data.isEmpty else { continue }
+            if mimeType == "image/tiff" {
+                if let png = pngData(fromImageData: data),
+                   let attachment = imageAttachment(
+                    data: png,
+                    name: "pasted-image.png",
+                    mimeType: "image/png",
+                    fileReference: "pasted-image.png"
+                   ) {
+                    return [attachment]
+                }
+                continue
+            }
+            if let attachment = imageAttachment(data: data, name: name, mimeType: mimeType, fileReference: name) {
+                return [attachment]
+            }
+            // Mis-labeled bytes: re-encode via NSImage → PNG.
+            if let png = pngData(fromImageData: data),
+               let attachment = imageAttachment(
+                data: png,
+                name: "pasted-image.png",
+                mimeType: "image/png",
+                fileReference: "pasted-image.png"
+               ) {
+                return [attachment]
+            }
         }
-        if let data = pasteboard.data(forType: .tiff),
-           let pngData = pngData(fromImageData: data),
-           let attachment = imageAttachment(data: pngData, name: "pasted-image.png", mimeType: "image/png", fileReference: "pasted-image.png") {
-            return [attachment]
+
+        // 2) Item-level image UTIs (some apps put image data only on the item).
+        for item in pasteboard.pasteboardItems ?? [] {
+            for type in item.types {
+                let raw = type.rawValue.lowercased()
+                if raw.contains("file-url") || raw.contains("plain-text") || raw == "public.utf8-plain-text" {
+                    continue
+                }
+                let looksLikeImage =
+                    type == .png
+                    || type == .tiff
+                    || type == jpegType
+                    || type == jpgType
+                    || raw.contains("image")
+                    || raw.contains("png")
+                    || raw.contains("jpeg")
+                    || raw.contains("tiff")
+                guard looksLikeImage, let data = item.data(forType: type), !data.isEmpty else { continue }
+                if let png = pngData(fromImageData: data),
+                   let attachment = imageAttachment(
+                    data: png,
+                    name: "pasted-image.png",
+                    mimeType: "image/png",
+                    fileReference: "pasted-image.png"
+                   ) {
+                    return [attachment]
+                }
+                if let attachment = imageAttachment(
+                    data: data,
+                    name: "pasted-image.png",
+                    mimeType: "image/png",
+                    fileReference: "pasted-image.png"
+                ) {
+                    return [attachment]
+                }
+            }
         }
+
+        // 3) NSImage object read — last resort for producers without raw PNG/TIFF.
+        if pasteboard.canReadObject(forClasses: [NSImage.self], options: nil),
+           let images = pasteboard.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage] {
+            for image in images {
+                guard let tiff = image.tiffRepresentation else { continue }
+                if let png = pngData(fromImageData: tiff),
+                   let attachment = imageAttachment(
+                    data: png,
+                    name: "pasted-image.png",
+                    mimeType: "image/png",
+                    fileReference: "pasted-image.png"
+                   ) {
+                    return [attachment]
+                }
+            }
+        }
+
         return []
     }
 
