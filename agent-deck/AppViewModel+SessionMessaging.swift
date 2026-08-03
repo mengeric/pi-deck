@@ -588,7 +588,20 @@ extension AppViewModel {
         deletePiAgentSessions(staleIDs)
     }
 
-    func deletePiAgentSessions(_ sessionIDs: Set<UUID>, fallbackSelectionID: UUID? = nil) {
+    /// Deletes Deck sessions and optionally linked Pi JSONL files.
+    ///
+    /// - Parameters:
+    ///   - sessionIDs: Session ids to remove from the store.
+    ///   - fallbackSelectionID: Preferred next selection after delete.
+    ///   - deleteLinkedPiSessionFiles: When `true`, also delete each session's
+    ///     `piSessionFile` (including **imported** reference-only files). When
+    ///     `false` (default), only paths listed in `ownedPiSessionFiles` are removed
+    ///     from disk (Deck-created sessions), matching historical cleanup behavior.
+    func deletePiAgentSessions(
+        _ sessionIDs: Set<UUID>,
+        fallbackSelectionID: UUID? = nil,
+        deleteLinkedPiSessionFiles: Bool = false
+    ) {
         if let retainedID = transientFocusedPiAgentSessionID, sessionIDs.contains(retainedID) {
             transientFocusedPiAgentSessionID = nil
         }
@@ -603,12 +616,19 @@ extension AppViewModel {
             .flatMap(\.value)
         let cancelledSubagentRunIDs = nativeSubagentRunner.cancelForSessionDeletion(parentSessionIDs: sessionIDs)
         let deletedSubagentRunIDs = Set(deletedSubagentRuns.map(\.id)).union(cancelledSubagentRunIDs)
-        let retainedPiSessionFiles = Set(piAgentSessionStore.sessions
-            .filter { !sessionIDs.contains($0.id) }
-            .flatMap(\.ownedPiSessionFiles)).union(PiAgentSessionOwnedArtifactCleanup.childPiSessionFiles(in: retainedSubagentRuns))
-        let deletedPiSessionFiles = Set(piAgentSessionStore.sessions
-            .filter { sessionIDs.contains($0.id) }
-            .flatMap(\.ownedPiSessionFiles)).union(PiAgentSessionOwnedArtifactCleanup.childPiSessionFiles(in: deletedSubagentRuns))
+        let retainedSessions = piAgentSessionStore.sessions.filter { !sessionIDs.contains($0.id) }
+        let deletedSessions = piAgentSessionStore.sessions.filter { sessionIDs.contains($0.id) }
+        let retainedPiSessionFiles = Set(retainedSessions.flatMap(\.ownedPiSessionFiles))
+            .union(retainedSessions.compactMap(\.piSessionFile))
+            .union(PiAgentSessionOwnedArtifactCleanup.childPiSessionFiles(in: retainedSubagentRuns))
+        // Default: only Deck-owned files. Opt-in: every linked `piSessionFile` too.
+        let deletedOwned = Set(deletedSessions.flatMap(\.ownedPiSessionFiles))
+        let deletedLinked = deleteLinkedPiSessionFiles
+            ? Set(deletedSessions.compactMap(\.piSessionFile))
+            : Set<String>()
+        let deletedPiSessionFiles = deletedOwned
+            .union(deletedLinked)
+            .union(PiAgentSessionOwnedArtifactCleanup.childPiSessionFiles(in: deletedSubagentRuns))
             .subtracting(retainedPiSessionFiles)
         for scheduler in nativeParallelSchedulersByID.values where sessionIDs.contains(scheduler.parentSession.id) {
             scheduler.isCancelled = true

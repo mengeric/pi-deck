@@ -296,18 +296,36 @@ struct PiAgentScreen: View {
             )
         }
         .alert(deleteSessionsAlertTitle, isPresented: $isDeleteSessionsAlertPresented) {
-            Button(
-                pendingDeleteIsClearAll
-                    ? LanguageStore.shared.t("common.clear")
-                    : LanguageStore.shared.t("common.delete"),
-                role: .destructive,
-                action: deletePendingSessions
-            )
-            Button(LanguageStore.shared.t("common.cancel"), role: .cancel) {
-                resetPendingSessionDelete()
-            }
+            deleteSessionsAlertButtons
         } message: {
-            Text(deleteSessionsAlertMessage)
+            Text(deleteSessionsAlertFullMessage)
         }
+    }
+
+    /// Destructive + cancel actions for session delete (includes optional Pi file removal).
+    @ViewBuilder
+    private var deleteSessionsAlertButtons: some View {
+        Button(
+            pendingDeleteIsClearAll
+                ? LanguageStore.shared.t("common.clear")
+                : LanguageStore.shared.t("common.delete"),
+            role: .destructive
+        ) {
+            deletePendingSessions()
+        }
+        Button(
+            LanguageStore.shared.t("session.deleteIncludingPiFiles"),
+            role: .destructive
+        ) {
+            deletePendingSessions(deleteLinkedPiSessionFiles: true)
+        }
+        Button(LanguageStore.shared.t("common.cancel"), role: .cancel) {
+            resetPendingSessionDelete()
+        }
+    }
+
+    /// Alert body including the optional disk-delete explanation.
+    private var deleteSessionsAlertFullMessage: String {
+        deleteSessionsAlertMessage + "\n\n" + LanguageStore.shared.t("session.deleteIncludingPiFilesHelp")
     }
 }

@@ -621,6 +621,116 @@ final class PiAgentSessionStore {
         )
     }
 
+    /// Creates (or focuses) a Deck session bound to an existing Pi native JSONL file.
+    ///
+    /// Import is **reference-only**: the path is stored on `piSessionFile` but is not
+    /// added to `ownedPiSessionFiles`, so default session deletion leaves the file on disk.
+    ///
+    /// - Parameters:
+    ///   - filePath: Absolute path to the Pi session `.jsonl`.
+    ///   - title: Sidebar title.
+    ///   - projectPath: Project root or empty for general chat.
+    ///   - projectName: Display name for the project scope.
+    ///   - repository: Optional `owner/repo` string.
+    ///   - piSessionId: Optional Pi header session id.
+    ///   - kind: Session kind (usually `.project` or `.codingAgent`).
+    /// - Returns: Existing session if the path was already imported; otherwise the new record.
+    @discardableResult
+    func createSessionFromImportedPiFile(
+        filePath: String,
+        title: String,
+        projectPath: String,
+        projectName: String,
+        repository: String?,
+        piSessionId: String?,
+        kind: PiAgentSessionKind
+    ) -> PiAgentSessionRecord {
+        let standardized = URL(fileURLWithPath: filePath).resolvingSymlinksInPath().standardizedFileURL.path
+        if let existing = sessions.first(where: {
+            guard let bound = $0.piSessionFile, !bound.isEmpty else { return false }
+            return URL(fileURLWithPath: bound).resolvingSymlinksInPath().standardizedFileURL.path == standardized
+        }) {
+            select(existing.id)
+            return existing
+        }
+
+        let now = Date()
+        var record = PiAgentSessionRecord(
+            id: UUID(),
+            kind: kind,
+            title: title.isEmpty ? "Imported Pi Session" : title,
+            projectPath: projectPath,
+            projectName: projectName,
+            repository: repository,
+            issueNumber: nil,
+            issueURL: nil,
+            piSessionFile: nil,
+            piSessionId: piSessionId,
+            model: nil,
+            modelProvider: nil,
+            modelOverrideID: nil,
+            modelOverrideProvider: nil,
+            thinkingLevel: nil,
+            launchCommand: nil,
+            branchName: nil,
+            worktreePath: nil,
+            sourceBranch: nil,
+            status: .idle,
+            lastError: nil,
+            lastSummary: nil,
+            needsAttention: false,
+            lastNotificationAt: nil,
+            inputTokens: nil,
+            outputTokens: nil,
+            cacheReadTokens: nil,
+            cacheWriteTokens: nil,
+            totalTokens: nil,
+            toolCalls: nil,
+            toolResults: nil,
+            contextTokens: nil,
+            contextWindow: nil,
+            contextPercent: nil,
+            cost: nil,
+            finalSystemPrompt: nil,
+            finalSystemPromptCapturedAt: nil,
+            pendingSteeringMessages: [],
+            pendingFollowUpMessages: [],
+            subagentsEnabled: newSessionSubagentsEnabled,
+            injectedExtensions: nil,
+            agentName: nil,
+            noProjectMode: projectPath.isEmpty ? .general : nil,
+            createdAt: now,
+            updatedAt: now
+        )
+        // Reference import — do not own the file for automatic disk cleanup.
+        record.recordPiSessionFile(standardized, ownsFile: false)
+
+        sessions.insert(record, at: 0)
+        sessionsTouchedThisRun.insert(record.id)
+        sortSessions()
+        transcriptsBySessionID[record.id] = []
+        transcriptRevisionsBySessionID[record.id] = 0
+        uiRequestsBySessionID[record.id] = nil
+        extensionNotifiesBySessionID[record.id] = nil
+        extensionChromeBySessionID[record.id] = nil
+        subagentRunsBySessionID[record.id] = []
+        supervisorRequestsBySessionID[record.id] = []
+        sessionPlansBySessionID[record.id] = nil
+        sessionPlanEventsBySessionID[record.id] = []
+        selectedSessionID = record.id
+        markTranscriptSessionUsed(record.id)
+        saveStructuralChange()
+        return record
+    }
+
+    /// Absolute Pi session paths currently bound in the store (for import de-dupe UI).
+    var boundPiSessionFilePaths: Set<String> {
+        Set(sessions.compactMap { record -> String? in
+            guard let path = record.piSessionFile, !path.isEmpty else { return nil }
+            return URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        })
+    }
+
     @discardableResult
     private func createSession(kind: PiAgentSessionKind, title: String, projectPath: String, projectName: String, repository: String?, model: String? = nil, worktreePath: String? = nil, branchName: String? = nil, sourceBranch: String? = nil, agentName: String? = nil, subagentsEnabled: Bool, noProjectMode: PiAgentNoProjectMode? = nil) -> PiAgentSessionRecord {
         let now = Date()

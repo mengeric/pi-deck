@@ -65,8 +65,11 @@ struct PiAgentAddSessionMenuButton: View {
     let action: () -> Void
     let onSelectAgentDeckBuilder: () -> Void
     let onSelectProject: (DiscoveredProject) -> Void
+    /// Optional host for the import sheet; when nil, import row is hidden.
+    var viewModel: AppViewModel? = nil
     @Environment(\.isEnabled) private var isEnabled
     @State private var isPresented = false
+    @State private var isImportSheetPresented = false
 
     var body: some View {
         AppCircleIconButton(
@@ -96,8 +99,21 @@ struct PiAgentAddSessionMenuButton: View {
                 onSelectProject: { project in
                     isPresented = false
                     onSelectProject(project)
+                },
+                onImportPiSession: viewModel == nil ? nil : {
+                    isPresented = false
+                    isImportSheetPresented = true
                 }
             )
+        }
+        .sheet(isPresented: $isImportSheetPresented) {
+            if let viewModel {
+                PiSessionImportSheet(
+                    viewModel: viewModel,
+                    preferredProject: selectedProject,
+                    onDismiss: { isImportSheetPresented = false }
+                )
+            }
         }
     }
 
@@ -137,6 +153,7 @@ struct PiAgentNewSessionSplitButton: View {
     @State private var resolvedAgents: [EffectiveAgentRecord] = []
     @State private var isAgentPickerPresented = false
     @State private var isProjectPickerPresented = false
+    @State private var isImportSheetPresented = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -207,6 +224,10 @@ struct PiAgentNewSessionSplitButton: View {
                     onSelectProject: { project in
                         isProjectPickerPresented = false
                         onNewSessionForProject(project)
+                    },
+                    onImportPiSession: {
+                        isProjectPickerPresented = false
+                        isImportSheetPresented = true
                     }
                 )
             }
@@ -215,17 +236,22 @@ struct PiAgentNewSessionSplitButton: View {
         .fixedSize()
         .glassEffect(.regular.tint(AppTheme.brandAccent.opacity(0.18)), in: Capsule(style: .continuous))
         .contentShape(Capsule(style: .continuous))
+        .sheet(isPresented: $isImportSheetPresented) {
+            PiSessionImportSheet(
+                viewModel: viewModel,
+                preferredProject: selectedProject,
+                onDismiss: { isImportSheetPresented = false }
+            )
+        }
         .onAppear { refresh() }
         .onChange(of: viewModel.selectedDiscoveredProject?.path) { _, _ in refresh() }
         .onChange(of: viewModel.discoveredProjects.count) { _, _ in refresh() }
     }
 
     private func plusAction() {
-        if selectedProject == nil, !projects.isEmpty {
-            isProjectPickerPresented.toggle()
-        } else {
-            onNewSession()
-        }
+        // Always open the popover so Import Pi Session stays reachable
+        // (even when a project is already selected).
+        isProjectPickerPresented.toggle()
     }
 
     private func refresh() {
@@ -359,6 +385,8 @@ private struct PiAgentProjectPickerPopover: View {
     let onSelectNoProject: () -> Void
     let onSelectAgentDeckBuilder: () -> Void
     let onSelectProject: (DiscoveredProject) -> Void
+    /// Opens the Pi native session import sheet (bound by the parent).
+    var onImportPiSession: (() -> Void)? = nil
 
     var body: some View {
         AppPopoverContainer(
@@ -386,6 +414,19 @@ private struct PiAgentProjectPickerPopover: View {
                     isCurrent: false
                 ) {
                     onSelectAgentDeckBuilder()
+                }
+
+                if let onImportPiSession {
+                    AppPopoverProjectRow(
+                        imageURL: nil,
+                        symbolName: "square.and.arrow.down",
+                        assetName: nil,
+                        title: LanguageStore.shared.t("session.import.menuTitle"),
+                        path: LanguageStore.shared.t("session.import.menuSubtitle"),
+                        isCurrent: false
+                    ) {
+                        onImportPiSession()
+                    }
                 }
 
                 ForEach(projects) { project in

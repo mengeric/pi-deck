@@ -1121,13 +1121,21 @@ nonisolated struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
     var createdAt: Date
     var updatedAt: Date
 
-    mutating func recordPiSessionFile(_ path: String?) {
+    /// Binds a Pi native session JSONL path.
+    /// - Parameters:
+    ///   - path: Absolute path to the `.jsonl` session file.
+    ///   - ownsFile: When `true` (default), Deck may delete this file when the
+    ///     session is removed. Import flows pass `false` so TUI/history files
+    ///     stay on disk unless the user explicitly opts into disk deletion.
+    mutating func recordPiSessionFile(_ path: String?, ownsFile: Bool = true) {
         guard let path = path?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else { return }
-        if let current = piSessionFile, !current.isEmpty, !ownedPiSessionFiles.contains(current) {
+        // Retire previous binding into ownership only when this record already owned it.
+        if ownsFile, let current = piSessionFile, !current.isEmpty, current != path,
+           !ownedPiSessionFiles.contains(current) {
             ownedPiSessionFiles.append(current)
         }
         piSessionFile = path
-        if !ownedPiSessionFiles.contains(path) {
+        if ownsFile, !ownedPiSessionFiles.contains(path) {
             ownedPiSessionFiles.append(path)
         }
     }

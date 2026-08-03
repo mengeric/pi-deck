@@ -191,7 +191,8 @@ extension PiAgentScreen {
                             onSelectAgentDeckBuilder: { viewModel.createAgentDeckBuilderDraft() },
                             onSelectProject: { project in
                                 viewModel.createPiAgentDraft(for: project)
-                            }
+                            },
+                            viewModel: viewModel
                         )
                     } else {
                         PiAgentAddSessionButton(
@@ -639,7 +640,7 @@ extension PiAgentScreen {
         pendingDeleteProjectName = nil
     }
 
-    func deleteSessionsImmediately(_ ids: Set<UUID>) {
+    func deleteSessionsImmediately(_ ids: Set<UUID>, deleteLinkedPiSessionFiles: Bool = false) {
         let existing = Set(store.sessions.map(\.id))
         let deleteIDs = ids.intersection(existing)
         guard !deleteIDs.isEmpty else { return }
@@ -676,16 +677,20 @@ extension PiAgentScreen {
             }
             hasBuiltVisibleSessions = true
         }
-        viewModel.deletePiAgentSessions(deleteIDs, fallbackSelectionID: nextID)
+        viewModel.deletePiAgentSessions(
+            deleteIDs,
+            fallbackSelectionID: nextID,
+            deleteLinkedPiSessionFiles: deleteLinkedPiSessionFiles
+        )
         rebuildVisibleSessions()
         syncMultiSelectionToSelectedSession()
         syncRuntimeFooterSnapshot()
     }
 
-    func deletePendingSessions() {
+    func deletePendingSessions(deleteLinkedPiSessionFiles: Bool = false) {
         let ids = pendingDeleteSessionIDs
         resetPendingSessionDelete()
-        deleteSessionsImmediately(ids)
+        deleteSessionsImmediately(ids, deleteLinkedPiSessionFiles: deleteLinkedPiSessionFiles)
     }
 
     func runtimeFooterSession(isRunning: Bool) -> PiAgentSessionRecord? {

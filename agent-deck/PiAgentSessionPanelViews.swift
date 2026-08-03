@@ -626,9 +626,23 @@ struct CodingAgentExpandedPanel: View {
                 viewModel.deletePiAgentSessions(deleteIDs, fallbackSelectionID: nextID)
                 resetPendingSessionDelete()
             }
+            Button(LanguageStore.shared.t("session.deleteIncludingPiFiles"), role: .destructive) {
+                let deleteIDs = pendingDeleteSessionIDs
+                let nextID = PiAgentSessionGrouping.nextSelectionAfterDeletion(
+                    visibleSessions: visibleSessions,
+                    deletedIDs: deleteIDs,
+                    selectedID: store.selectedSession?.id
+                )
+                viewModel.deletePiAgentSessions(
+                    deleteIDs,
+                    fallbackSelectionID: nextID,
+                    deleteLinkedPiSessionFiles: true
+                )
+                resetPendingSessionDelete()
+            }
             Button(LanguageStore.shared.t("common.cancel"), role: .cancel) { resetPendingSessionDelete() }
         } message: {
-            Text(deleteSessionsAlertMessage)
+            Text(deleteSessionsAlertMessage + "\n\n" + LanguageStore.shared.t("session.deleteIncludingPiFilesHelp"))
         }
     }
 

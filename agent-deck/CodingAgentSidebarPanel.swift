@@ -85,7 +85,8 @@ struct CodingAgentNewSessionControls: View {
             selectedProject: nil,
             action: { viewModel.createNoProjectPiAgentDraft() },
             onSelectAgentDeckBuilder: { viewModel.createAgentDeckBuilderDraft() },
-            onSelectProject: { viewModel.createPiAgentDraft(for: $0) }
+            onSelectProject: { viewModel.createPiAgentDraft(for: $0) },
+            viewModel: viewModel
         )
     }
 
