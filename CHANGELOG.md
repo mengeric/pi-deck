@@ -1,6 +1,27 @@
 ## Unreleased
 
-- Removed Codex Computer Use MCP integration, broker install scripts, ChatGPT start gate, and related settings/tests.
+## 0.0.11 — 2026-08-03
+
+### Highlights
+- **导入 Pi 会话**：`+` 菜单支持从 `~/.pi/agent/sessions` 导入原生 `.jsonl`，侧栏可浏览历史并 resume 续聊。
+- **导入目录树**：左侧按会话 `cwd` 目录树筛选，支持搜索与选文件兜底。
+- **自动加入项目**：导入时若 `cwd` 尚未在 Deck 项目库中，自动注册并绑定（跳过 temp/home/scratch）。
+- **删除可选删盘**：删除会话可「仅移除 Deck 行」或「同时删除 Pi 文件」；引用导入默认不占用磁盘所有权。
+
+### Tests
+- `PiSessionImportTests`：自动注册路径策略、目录树/筛选、引用导入 ownership 与去重（路径可移植）。
+
+### Packaging
+- `MARKETING_VERSION` **0.0.11**，`CURRENT_PROJECT_VERSION` **11**
+- Tag: `v0.0.11`
+- Artifacts: `build/Pi-Deck-0.0.11.zip`, `build/Pi-Deck-0.0.11.dmg`（未签名）
+
+### Install (unsigned)
+```bash
+xattr -cr "/Applications/Pi Deck.app"
+```
+
+---
 
 # Changelog
 
