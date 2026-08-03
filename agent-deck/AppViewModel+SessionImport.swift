@@ -77,13 +77,11 @@ extension AppViewModel {
             return existing
         }
 
+        // Prefer explicit project, else cwd match, else auto-add cwd into the project library.
         let project: DiscoveredProject? = {
             if let preferredProject { return preferredProject }
             guard let cwd = candidate.cwd, !cwd.isEmpty else { return nil }
-            let std = PiNativeSessionCatalog.standardizedPath(cwd)
-            return discoveredProjects.first {
-                PiNativeSessionCatalog.standardizedPath($0.path) == std
-            } ?? projectByPath[std]
+            return resolveOrRegisterProjectForImport(cwd: cwd)
         }()
 
         let title = candidate.displayTitle
@@ -117,5 +115,87 @@ extension AppViewModel {
         // Force a full rebuild from Pi's file (empty local transcript).
         piAgentRunner.rehydrateTranscriptFromSessionFileIfNeeded(record)
         return record
+    }
+
+    /// Resolves a project for import: existing library entry, or auto-register the cwd directory.
+    ///
+    /// - Parameter cwd: Working directory from the Pi session header.
+    /// - Returns: Matching / newly registered `DiscoveredProject`, or `nil` when the path is
+    ///   missing or not suitable as a Deck project (temp dirs, home, etc.).
+    @discardableResult
+    func resolveOrRegisterProjectForImport(cwd: String) -> DiscoveredProject? {
+        let std = PiNativeSessionCatalog.standardizedPath(cwd)
+        if let existing = projectByPath[std]
+            ?? discoveredProjects.first(where: {
+                PiNativeSessionCatalog.standardizedPath($0.path) == std
+            }) {
+            // Re-enable if the user had disabled it but is now importing work from it.
+            if projectPreference(for: existing.path).isEnabled == false {
+                setProjectEnabled(true, for: existing)
+            }
+            return projectByPath[existing.path] ?? existing
+        }
+
+        guard shouldAutoRegisterImportedProject(at: std) else { return nil }
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: std, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return nil
+        }
+
+        // Persist into the project library and kick a normal refresh.
+        addProject(URL(fileURLWithPath: std, isDirectory: true), selectingAfterAdd: false)
+
+        // Synchronously materialize a `DiscoveredProject` so the imported session can bind
+        // immediately (async refresh may land a moment later).
+        let discovered = ProjectDiscovery().discoverProjects(
+            rootDirectoryURLs: [],
+            additionalProjectPaths: [std],
+            preferencesByPath: projectPreferencesByPath
+        )
+        guard let project = discovered.first(where: {
+            PiNativeSessionCatalog.standardizedPath($0.path) == std
+        }) ?? discovered.first else {
+            return nil
+        }
+
+        if !discoveredProjects.contains(where: {
+            PiNativeSessionCatalog.standardizedPath($0.path) == project.path
+        }) {
+            var next = discoveredProjects
+            next.append(project)
+            next.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            discoveredProjects = next
+        }
+        return projectByPath[project.path] ?? project
+    }
+
+    /// Whether an absolute path is safe/useful to auto-add as a Deck project during import.
+    ///
+    /// - Parameter path: Standardized absolute directory path.
+    /// - Returns: `false` for temp/scratch/home roots that should stay as general chat.
+    nonisolated func shouldAutoRegisterImportedProject(at path: String) -> Bool {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "/" else { return false }
+
+        let home = FileManager.default.homeDirectoryForCurrentUser
+            .resolvingSymlinksInPath().standardizedFileURL.path
+        if trimmed == home { return false }
+
+        let lower = trimmed.lowercased()
+        // Ephemeral / system scratch — not real project roots.
+        if lower.hasPrefix("/var/")
+            || lower.hasPrefix("/private/var/")
+            || lower.hasPrefix("/tmp/")
+            || lower.hasPrefix("/private/tmp/") {
+            return false
+        }
+        // Deck general-chat sandboxes and similar app-support scratch dirs.
+        if lower.contains("/library/application support/")
+            && (lower.contains("general chats") || lower.contains("/pi deck/") || lower.contains("/agent deck/")) {
+            return false
+        }
+        return true
     }
 }
