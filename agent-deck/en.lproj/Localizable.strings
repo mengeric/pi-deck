@@ -2414,3 +2414,8 @@
 "session.import.errorInvalid" = "That file does not look like a Pi session.";
 "session.deleteIncludingPiFiles" = "Delete & Remove Pi Files";
 "session.deleteIncludingPiFilesHelp" = "Delete removes the row from Pi Deck. Delete and Remove Pi Files also deletes linked Pi .jsonl session files on disk (including imported ones).";
+"session.import.treeTitle" = "Directories";
+"session.import.treeAll" = "All sessions";
+"session.import.treeUnknown" = "Unknown path";
+"session.import.emptyFilterTitle" = "No sessions here";
+"session.import.emptyFilterBody" = "Nothing matches this directory or search. Pick another folder on the left or clear the search.";

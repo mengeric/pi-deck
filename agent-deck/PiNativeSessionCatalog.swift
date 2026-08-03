@@ -26,8 +26,28 @@ nonisolated struct PiNativeSessionCandidate: Identifiable, Hashable, Sendable {
     let messageCount: Int
 }
 
+/// A node in the import sidebar directory tree (built from session `cwd` paths).
+///
+/// - Parameters: N/A (value type). `pathPrefix` is the absolute directory used to filter.
+nonisolated struct PiNativeSessionTreeNode: Identifiable, Hashable, Sendable {
+    /// Absolute path prefix (or synthetic id for buckets like "unknown").
+    let id: String
+    /// Last path component for the row label.
+    let name: String
+    /// Absolute directory path used as a filter prefix (`cwd` starts with this).
+    let pathPrefix: String
+    /// Child directories, sorted by name.
+    var children: [PiNativeSessionTreeNode]
+    /// Number of session files under this node (including descendants).
+    var sessionCount: Int
+}
+
 /// Enumerates and lightly parses Pi session JSONL under `~/.pi/agent/sessions`.
 enum PiNativeSessionCatalog {
+    /// Synthetic tree id for sessions with no usable `cwd`.
+    nonisolated static let unknownTreeID = "__pi_session_import_unknown__"
+    /// Synthetic tree id for "show all".
+    nonisolated static let allTreeID = "__pi_session_import_all__"
     /// Maximum bytes read when probing a candidate for title/messages.
     nonisolated private static let probeByteLimit = 256 * 1024
     /// Maximum lines scanned inside the probe window.
@@ -225,5 +245,106 @@ enum PiNativeSessionCatalog {
     /// Standardizes a filesystem path for cwd comparison.
     nonisolated static func standardizedPath(_ path: String) -> String {
         URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
+    /// Builds a directory tree from candidates' `cwd` values for sidebar filtering.
+    ///
+    /// - Parameter candidates: Session files already probed from disk.
+    /// - Returns: Root children (not including the synthetic "All" row).
+    nonisolated static func directoryTree(from candidates: [PiNativeSessionCandidate]) -> [PiNativeSessionTreeNode] {
+        // pathPrefix -> (name, count, child names)
+        var counts: [String: Int] = [:]
+        var childNames: [String: Set<String>] = [:]
+        var nameByPrefix: [String: String] = ["/": "/"]
+        var unknownCount = 0
+
+        for candidate in candidates {
+            guard let rawCwd = candidate.cwd?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !rawCwd.isEmpty else {
+                unknownCount += 1
+                continue
+            }
+            let cwd = standardizedPath(rawCwd)
+            let components = URL(fileURLWithPath: cwd).pathComponents.filter { $0 != "/" }
+            guard !components.isEmpty else {
+                unknownCount += 1
+                continue
+            }
+
+            var built = ""
+            var parent = "/"
+            for component in components {
+                built += "/" + component
+                nameByPrefix[built] = component
+                counts[built, default: 0] += 1
+                childNames[parent, default: []].insert(component)
+                parent = built
+            }
+        }
+
+        func build(prefix: String) -> PiNativeSessionTreeNode {
+            let name = nameByPrefix[prefix] ?? URL(fileURLWithPath: prefix).lastPathComponent
+            let childComponents = (childNames[prefix] ?? []).sorted {
+                $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+            }
+            let kids: [PiNativeSessionTreeNode] = childComponents.map { component in
+                let childPrefix = prefix == "/" ? "/" + component : prefix + "/" + component
+                return build(prefix: childPrefix)
+            }
+            return PiNativeSessionTreeNode(
+                id: prefix,
+                name: name,
+                pathPrefix: prefix,
+                children: kids,
+                sessionCount: counts[prefix] ?? kids.reduce(0) { $0 + $1.sessionCount }
+            )
+        }
+
+        let topNames = (childNames["/"] ?? []).sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+        var roots = topNames.map { build(prefix: "/" + $0) }
+
+        if unknownCount > 0 {
+            roots.append(
+                PiNativeSessionTreeNode(
+                    id: unknownTreeID,
+                    name: "Unknown",
+                    pathPrefix: unknownTreeID,
+                    children: [],
+                    sessionCount: unknownCount
+                )
+            )
+        }
+        return roots
+    }
+
+    /// Filters candidates by a selected tree node (path prefix or unknown bucket).
+    ///
+    /// - Parameters:
+    ///   - candidates: Full candidate list.
+    ///   - selectedTreeID: `allTreeID`, `unknownTreeID`, or an absolute directory path.
+    /// - Returns: Candidates matching the selection.
+    nonisolated static func filterCandidates(
+        _ candidates: [PiNativeSessionCandidate],
+        selectedTreeID: String?
+    ) -> [PiNativeSessionCandidate] {
+        guard let selectedTreeID, !selectedTreeID.isEmpty, selectedTreeID != allTreeID else {
+            return candidates
+        }
+        if selectedTreeID == unknownTreeID {
+            return candidates.filter {
+                guard let cwd = $0.cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !cwd.isEmpty else {
+                    return true
+                }
+                return false
+            }
+        }
+        let prefix = selectedTreeID.hasSuffix("/") ? String(selectedTreeID.dropLast()) : selectedTreeID
+        return candidates.filter { candidate in
+            guard let cwdRaw = candidate.cwd, !cwdRaw.isEmpty else { return false }
+            let cwd = standardizedPath(cwdRaw)
+            return cwd == prefix || cwd.hasPrefix(prefix + "/")
+        }
     }
 }

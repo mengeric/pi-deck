@@ -2413,3 +2413,8 @@
 "session.import.errorInvalid" = "该文件不像有效的 Pi 会话。";
 "session.deleteIncludingPiFiles" = "删除并移除 Pi 文件";
 "session.deleteIncludingPiFilesHelp" = "「删除」只从 Pi Deck 移除会话。「删除并移除 Pi 文件」会同时删除磁盘上关联的 Pi .jsonl（含导入的会话）。";
+"session.import.treeTitle" = "目录";
+"session.import.treeAll" = "全部会话";
+"session.import.treeUnknown" = "未知路径";
+"session.import.emptyFilterTitle" = "此处无会话";
+"session.import.emptyFilterBody" = "当前目录或搜索无匹配项。请在左侧选择其他文件夹，或清空搜索。";
