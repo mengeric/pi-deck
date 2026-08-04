@@ -1,5 +1,28 @@
 ## Unreleased
 
+## 0.0.12 — 2026-08-04
+
+### Highlights
+- **粘贴图片修复**：支持 JPEG / NSImage 回退；忽略幽灵 file-url，避免吞掉 Cmd+V。
+- **粘贴只挂一张**：截图剪贴板同时带 file-url + PNG 时不再双挂；AppKit paste 与 SwiftUI `onPasteCommand` 共享 claim，同一次 Cmd+V 只 attach 一次。
+- **回车发送**：IME 选词后不再用 280ms 宽窗口吞掉第一次回车；仅回车选词后 60ms 防重复，发送前强制同步 `NSTextView` 文本到 binding。
+
+### Tests
+- `PiAgentComposerImagePasteTests`：PNG/JPEG/TIFF/NSImage、file+bitmap 去重、ghost URL、paste claim。
+- `ComposerReturnSendPolicyTests`：IME duplicate-Return 策略与 pre-send flush。
+
+### Packaging
+- `MARKETING_VERSION` **0.0.12**，`CURRENT_PROJECT_VERSION` **12**
+- Tag: `v0.0.12`
+- Artifacts: `build/Pi-Deck-0.0.12.zip`, `build/Pi-Deck-0.0.12.dmg`（未签名）
+
+### Install (unsigned)
+```bash
+xattr -cr "/Applications/Pi Deck.app"
+```
+
+---
+
 ## 0.0.11 — 2026-08-03
 
 ### Highlights
