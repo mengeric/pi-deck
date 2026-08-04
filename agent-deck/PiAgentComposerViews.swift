@@ -454,25 +454,15 @@ struct PiAgentComposerBox: View {
         }
         .shadow(color: .black.opacity(0.05), radius: 14, x: 0, y: 7)
         .onPasteCommand(of: [.png, .jpeg, .tiff, .gif, .webP, .fileURL, .image]) { _ in
+            // Cmd+V is also handled by DropSafeNSTextView.paste → handleDrop.
+            // Claim once so SwiftUI + AppKit do not each attach the same image.
             let pasteboard = NSPasteboard.general
-            let urls = PiAgentComposerImageLoader.fileURLs(from: pasteboard)
-            if !urls.isEmpty {
-                let folderURLs = urls.filter { PiAgentFolderAttachment(url: $0) != nil }
-                let fileCandidates = urls.filter { PiAgentFolderAttachment(url: $0) == nil }
-                let imageAttachments = fileCandidates.compactMap { PiAgentComposerImageLoader.imageAttachment(fromFileURL: $0) }
-                let files = fileCandidates.filter { PiAgentComposerImageLoader.imageAttachment(fromFileURL: $0) == nil }
-                addImages(imageAttachments)
-                onFiles(files)
-                onFolders(folderURLs)
-            }
-            let images = PiAgentComposerImageLoader.imagesFromPasteboard(pasteboard)
-            // Avoid double-adding path-backed images already attached above.
-            let extra = images.filter { image in
-                urls.allSatisfy { $0.path != image.fileReference }
-            }
-            if !extra.isEmpty {
-                addImages(extra)
-            }
+            let resolved = PiAgentComposerImageLoader.resolvedPasteboardAttachments(from: pasteboard)
+            guard resolved.hasAttachments else { return }
+            guard ComposerImagePasteBridge.claimPasteHandling() else { return }
+            addImages(resolved.images)
+            onFiles(resolved.files)
+            onFolders(resolved.folders)
         }
         .onDrop(of: [.fileURL, .png, .jpeg, .tiff, .gif, .webP, .image], isTargeted: $isDropTargeted) { providers in
             // Defer NSItemProvider loading off the drop callback so AppKit can
@@ -837,36 +827,25 @@ struct PiAgentDropSafeTextEditor: NSViewRepresentable {
         }
 
         func handleDrop(_ pasteboard: NSPasteboard) -> Bool {
-            var urls = PiAgentComposerImageLoader.fileURLs(from: pasteboard)
-            if urls.isEmpty {
-                urls = PiAgentComposerImageLoader.fileURLsFromPlainTextPaths(pasteboard)
-            }
-            let folders = urls.filter { PiAgentFolderAttachment(url: $0) != nil }
-            let nonFolderURLs = urls.filter { PiAgentFolderAttachment(url: $0) == nil }
-            let pathImages = nonFolderURLs.compactMap { PiAgentComposerImageLoader.imageAttachment(fromFileURL: $0) }
-            // Ignore ghost file-urls that are not on disk — they used to make handleDrop
-            // return true and swallow Cmd+V without attaching a bitmap image.
-            let files = nonFolderURLs.filter { url in
-                guard PiAgentComposerImageLoader.imageAttachment(fromFileURL: url) == nil else { return false }
-                return FileManager.default.fileExists(atPath: url.path)
-            }
-            // Bitmap-only clipboard (screenshots, browser "Copy Image", JPEG producers).
-            // Call the bitmap-only path so we don't re-walk file URLs twice.
-            let clipboardImages = PiAgentComposerImageLoader.bitmapImagesFromPasteboard(pasteboard)
-            let images = pathImages + clipboardImages
-
-            if images.isEmpty && files.isEmpty && folders.isEmpty {
+            let resolved = PiAgentComposerImageLoader.resolvedPasteboardAttachments(from: pasteboard)
+            if !resolved.hasAttachments {
                 // Plain text (or nothing attachable) — let the text paste path handle it.
                 return false
             }
-            if !images.isEmpty {
-                parent.onImages(images)
+            // Share a claim with SwiftUI `.onPasteCommand` so Cmd+V attaches once.
+            guard ComposerImagePasteBridge.claimPasteHandling() else {
+                // Peer path already attached; still consume paste so NSTextView does not
+                // insert raw image bytes as text.
+                return true
             }
-            if !files.isEmpty {
-                parent.onFiles(files)
+            if !resolved.images.isEmpty {
+                parent.onImages(resolved.images)
             }
-            if !folders.isEmpty {
-                parent.onFolders(folders)
+            if !resolved.files.isEmpty {
+                parent.onFiles(resolved.files)
+            }
+            if !resolved.folders.isEmpty {
+                parent.onFolders(resolved.folders)
             }
             return true
         }
@@ -1244,16 +1223,110 @@ struct PiAgentImageAttachmentThumbnail: View {
     }
 }
 
+/// Serializes image/file paste so AppKit `paste` and SwiftUI `onPasteCommand` do not double-attach.
+enum ComposerImagePasteBridge {
+    /// Coalescing window for a single Cmd+V / paste gesture (seconds, system uptime).
+    nonisolated static let claimWindow: TimeInterval = 0.45
+    nonisolated(unsafe) private static var lastClaimUptime: TimeInterval = 0
+    nonisolated private static let lock = NSLock()
+
+    /// Attempts to own the current paste gesture.
+    ///
+    /// - Returns: `true` if this caller should attach; `false` if a peer already claimed.
+    @discardableResult
+    nonisolated static func claimPasteHandling(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if lastClaimUptime > 0, now - lastClaimUptime < claimWindow {
+            return false
+        }
+        lastClaimUptime = now
+        return true
+    }
+
+    /// Resets claim state (unit tests only).
+    nonisolated static func resetClaimsForTests() {
+        lock.lock()
+        lastClaimUptime = 0
+        lock.unlock()
+    }
+}
+
 enum PiAgentComposerImageLoader {
     nonisolated private static let maxDimension: CGFloat = 2_000
     nonisolated private static let maxEncodedBytes = Int(4.5 * 1024 * 1024)
 
+    /// Resolved pasteboard payload for composer attach (images / files / folders).
+    struct ResolvedPasteboardAttachments: Sendable {
+        var images: [PiAgentImageAttachment]
+        var files: [URL]
+        var folders: [URL]
+
+        /// Whether anything should be attached to the composer.
+        var hasAttachments: Bool {
+            !images.isEmpty || !files.isEmpty || !folders.isEmpty
+        }
+    }
+
+    /// Prefer disk-backed image files over clipboard bitmaps when both exist.
+    ///
+    /// Screenshots and many “Copy Image” producers put **both** a temp `file-url`
+    /// and PNG/TIFF bytes on the pasteboard. Summing both attached the same
+    /// picture twice.
+    ///
+    /// - Parameters:
+    ///   - pathImages: Attachments loaded from existing local file URLs.
+    ///   - clipboardImages: Attachments from raster pasteboard types / NSImage.
+    /// - Returns: Path images when non-empty; otherwise clipboard images.
+    nonisolated static func coalescePasteboardImages(
+        pathImages: [PiAgentImageAttachment],
+        clipboardImages: [PiAgentImageAttachment]
+    ) -> [PiAgentImageAttachment] {
+        if !pathImages.isEmpty { return pathImages }
+        return clipboardImages
+    }
+
+    /// Whether `url` is an existing local directory (nonisolated; no MainActor models).
+    ///
+    /// - Parameter url: Candidate file URL.
+    /// - Returns: `true` when the path exists and is a directory.
+    nonisolated private static func isExistingDirectory(_ url: URL) -> Bool {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { return false }
+        return isDir.boolValue
+    }
+
+    /// Builds a single, de-duplicated attach payload from a pasteboard.
+    ///
+    /// - Parameter pasteboard: Source (tests use a private pasteboard name).
+    /// - Returns: Images (path XOR bitmap), non-image files that exist on disk, folders.
+    nonisolated static func resolvedPasteboardAttachments(
+        from pasteboard: NSPasteboard
+    ) -> ResolvedPasteboardAttachments {
+        var urls = fileURLs(from: pasteboard)
+        if urls.isEmpty {
+            urls = fileURLsFromPlainTextPaths(pasteboard)
+        }
+        let folderURLs = urls.filter { isExistingDirectory($0) }
+        let nonFolderURLs = urls.filter { !isExistingDirectory($0) }
+        let pathImages = nonFolderURLs.compactMap { imageAttachment(fromFileURL: $0) }
+        // Ignore ghost file-urls that are not on disk.
+        let files = nonFolderURLs.filter { url in
+            // Pattern-match optional so we do not require MainActor Equatable.
+            switch imageAttachment(fromFileURL: url) {
+            case .some:
+                return false
+            case .none:
+                return FileManager.default.fileExists(atPath: url.path)
+            }
+        }
+        let clipboardImages = bitmapImagesFromPasteboard(pasteboard)
+        let images = coalescePasteboardImages(pathImages: pathImages, clipboardImages: clipboardImages)
+        return ResolvedPasteboardAttachments(images: images, files: files, folders: folderURLs)
+    }
+
     nonisolated static func imagesFromPasteboard(_ pasteboard: NSPasteboard = .general) -> [PiAgentImageAttachment] {
-        var attachments: [PiAgentImageAttachment] = []
-        let urls = fileURLs(from: pasteboard)
-        attachments.append(contentsOf: urls.compactMap(imageAttachment(fromFileURL:)))
-        attachments.append(contentsOf: bitmapImagesFromPasteboard(pasteboard))
-        return attachments
+        resolvedPasteboardAttachments(from: pasteboard).images
     }
 
     /// Raster images from the pasteboard only (no file-URL walk).

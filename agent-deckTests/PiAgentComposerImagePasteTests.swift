@@ -13,6 +13,7 @@ final class PiAgentComposerImagePasteTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        ComposerImagePasteBridge.resetClaimsForTests()
         pasteboard = NSPasteboard(name: NSPasteboard.Name("pi.deck.tests.image-paste.\(UUID().uuidString)"))
         pasteboard.clearContents()
     }
@@ -20,6 +21,7 @@ final class PiAgentComposerImagePasteTests: XCTestCase {
     override func tearDown() {
         pasteboard?.clearContents()
         pasteboard = nil
+        ComposerImagePasteBridge.resetClaimsForTests()
         super.tearDown()
     }
 
@@ -127,6 +129,123 @@ final class PiAgentComposerImagePasteTests: XCTestCase {
 
         // Ghost path must not decode as an image file.
         XCTAssertNil(PiAgentComposerImageLoader.imageAttachment(fromFileURL: ghost))
+    }
+
+    // MARK: - Coalesce path vs bitmap (double-image regression)
+
+    /// Prefer path-backed images when both path and clipboard bitmaps are present.
+    func testCoalescePrefersPathImagesOverClipboard() {
+        let path = [
+            PiAgentImageAttachment(
+                name: "disk.png",
+                mimeType: "image/png",
+                data: "cGF0aA==",
+                sizeBytes: 4,
+                fileReference: "/tmp/disk.png"
+            )
+        ]
+        let clip = [
+            PiAgentImageAttachment(
+                name: "pasted-image.png",
+                mimeType: "image/png",
+                data: "Y2xpcA==",
+                sizeBytes: 4,
+                fileReference: "pasted-image.png"
+            )
+        ]
+        let merged = PiAgentComposerImageLoader.coalescePasteboardImages(
+            pathImages: path,
+            clipboardImages: clip
+        )
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged.first?.fileReference, "/tmp/disk.png")
+    }
+
+    /// Clipboard-only when no path images.
+    func testCoalesceFallsBackToClipboardWhenNoPath() {
+        let clip = [
+            PiAgentImageAttachment(
+                name: "pasted-image.png",
+                mimeType: "image/png",
+                data: "Y2xpcA==",
+                sizeBytes: 4,
+                fileReference: "pasted-image.png"
+            )
+        ]
+        let merged = PiAgentComposerImageLoader.coalescePasteboardImages(
+            pathImages: [],
+            clipboardImages: clip
+        )
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged.first?.fileReference, "pasted-image.png")
+    }
+
+    /// Screenshot-style pasteboard: real file-url **and** PNG bytes → exactly one image.
+    func testResolvedAttachmentsDoesNotDuplicateFileAndBitmap() throws {
+        let png = try Self.makePNGData(color: .systemPink, size: NSSize(width: 12, height: 12))
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pi-deck-shot-\(UUID().uuidString).png")
+        try png.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        pasteboard.clearContents()
+        pasteboard.writeObjects([url as NSURL])
+        pasteboard.setData(png, forType: .png)
+
+        let pathOnly = [try XCTUnwrap(PiAgentComposerImageLoader.imageAttachment(fromFileURL: url))]
+        let bitmaps = PiAgentComposerImageLoader.bitmapImagesFromPasteboard(pasteboard)
+        XCTAssertEqual(pathOnly.count, 1)
+        XCTAssertEqual(bitmaps.count, 1, "bitmap path still sees PNG")
+
+        // Old bug: path + bitmap concatenated → 2. New: coalesce → 1.
+        let naiveCount = pathOnly.count + bitmaps.count
+        XCTAssertEqual(naiveCount, 2)
+        let coalesced = PiAgentComposerImageLoader.coalescePasteboardImages(
+            pathImages: pathOnly,
+            clipboardImages: bitmaps
+        )
+        XCTAssertEqual(coalesced.count, 1)
+
+        let resolved = PiAgentComposerImageLoader.resolvedPasteboardAttachments(from: pasteboard)
+        XCTAssertEqual(resolved.images.count, 1, "screenshot paste must attach exactly one image")
+        XCTAssertTrue(resolved.files.isEmpty)
+        XCTAssertTrue(resolved.folders.isEmpty)
+        XCTAssertTrue(resolved.hasAttachments)
+    }
+
+    /// Ghost file-url + PNG resolves to single bitmap (no crash, no empty attach).
+    func testResolvedGhostFileURLUsesBitmapOnly() throws {
+        let png = try Self.makePNGData(color: .systemIndigo, size: NSSize(width: 5, height: 5))
+        let ghost = URL(fileURLWithPath: "/tmp/pi-deck-ghost-\(UUID().uuidString).png")
+        pasteboard.clearContents()
+        pasteboard.writeObjects([ghost as NSURL])
+        pasteboard.setData(png, forType: .png)
+
+        let resolved = PiAgentComposerImageLoader.resolvedPasteboardAttachments(from: pasteboard)
+        XCTAssertEqual(resolved.images.count, 1)
+    }
+
+    // MARK: - Paste claim (SwiftUI + AppKit double fire)
+
+    /// Second claim inside the window is rejected (AppKit vs onPasteCommand).
+    func testPasteClaimRejectsSecondHandlerInWindow() {
+        ComposerImagePasteBridge.resetClaimsForTests()
+        let t0: TimeInterval = 1_000
+        XCTAssertTrue(ComposerImagePasteBridge.claimPasteHandling(now: t0))
+        XCTAssertFalse(ComposerImagePasteBridge.claimPasteHandling(now: t0 + 0.1))
+        XCTAssertFalse(ComposerImagePasteBridge.claimPasteHandling(now: t0 + 0.4))
+    }
+
+    /// After the claim window, a new paste may attach again.
+    func testPasteClaimAllowsAfterWindow() {
+        ComposerImagePasteBridge.resetClaimsForTests()
+        let t0: TimeInterval = 50
+        XCTAssertTrue(ComposerImagePasteBridge.claimPasteHandling(now: t0))
+        XCTAssertTrue(
+            ComposerImagePasteBridge.claimPasteHandling(
+                now: t0 + ComposerImagePasteBridge.claimWindow + 0.01
+            )
+        )
     }
 
     // MARK: - process pipeline
