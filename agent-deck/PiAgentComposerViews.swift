@@ -886,6 +886,14 @@ struct PiAgentDropSafeTextEditor: NSViewRepresentable {
             return true
         }
 
+        func syncComposerText(_ text: String) {
+            // Keep the binding aligned with the AppKit editor so send does not
+            // read a stale empty `composerText` and no-op (felt like "press Enter twice").
+            if parent.text != text {
+                parent.text = text
+            }
+        }
+
         func send() {
             guard !parent.isDisabled else { return }
             parent.onSend()
@@ -928,6 +936,10 @@ protocol DropSafeNSTextViewDropHandler: AnyObject {
 
 @MainActor
 protocol DropSafeNSTextViewKeyHandler: AnyObject {
+    /// Push the live `NSTextView` string into the SwiftUI binding before send.
+    ///
+    /// - Parameter text: Current editor contents (Return does not fire `textDidChange`).
+    func syncComposerText(_ text: String)
     func send()
     func clear()
     /// Whether the composer suggestion panel is currently shown. When true, the
@@ -945,12 +957,14 @@ final class DropSafeNSTextView: NSTextView {
     weak var dropHandler: DropSafeNSTextViewDropHandler?
     weak var keyHandler: DropSafeNSTextViewKeyHandler?
     private var lastEscapeAt: TimeInterval?
-    /// Wall-clock time when marked (IME preedit) text last disappeared.
-    /// Used to swallow a spurious Return that some IMEs deliver after commit.
-    private var lastCompositionEndedAt: TimeInterval = 0
+    /// When non-zero, plain Return is ignored until this `systemUptime`.
+    /// Only armed when composition ends **on Return** (candidate confirm), to drop
+    /// a duplicate Return some IMEs inject in the same key burst — not a long
+    /// blanket window after every composition (that forced a second Enter to send).
+    private var swallowReturnUntilUptime: TimeInterval = 0
     private var wasComposing = false
-    /// Ignore plain Return for this long after IME composition ends (seconds).
-    private static let postIMECommitSendGuard: TimeInterval = 0.28
+    /// Tight window for IME duplicate-Return only (seconds).
+    private static let postIMEDuplicateReturnGuard: TimeInterval = 0.06
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard acceptsDrop(sender.draggingPasteboard) else {
@@ -988,32 +1002,35 @@ final class DropSafeNSTextView: NSTextView {
 
     override func unmarkText() {
         super.unmarkText()
-        lastCompositionEndedAt = ProcessInfo.processInfo.systemUptime
         wasComposing = false
+        // Do not arm Return-swallow here: unmarkText also runs when composition
+        // ends via Space/number keys; a long guard after those made the next
+        // Enter a no-op.
     }
 
     override func keyDown(with event: NSEvent) {
+        let characters = event.charactersIgnoringModifiers ?? ""
+        let isReturn = characters == "\r" || characters == "\n"
+        let modifiers = event.modifierFlags.intersection([.shift, .command, .option, .control])
+
         // While an IME composition is active (e.g. Chinese pinyin candidates),
         // never intercept keys — Return confirms the candidate, not send.
         if hasMarkedText() {
             wasComposing = true
             super.keyDown(with: event)
-            // Some commits clear marked text inside super.keyDown; record end time.
+            // Some commits clear marked text inside super.keyDown.
             if !hasMarkedText(), wasComposing {
-                lastCompositionEndedAt = ProcessInfo.processInfo.systemUptime
                 wasComposing = false
+                // Only Return-to-confirm needs a short duplicate-Return shield.
+                if isReturn && modifiers.isEmpty {
+                    swallowReturnUntilUptime =
+                        ProcessInfo.processInfo.systemUptime + Self.postIMEDuplicateReturnGuard
+                }
             }
             return
         }
 
-        if wasComposing {
-            lastCompositionEndedAt = ProcessInfo.processInfo.systemUptime
-            wasComposing = false
-        }
-
-        let characters = event.charactersIgnoringModifiers ?? ""
-        let isReturn = characters == "\r" || characters == "\n"
-        let modifiers = event.modifierFlags.intersection([.shift, .command, .option, .control])
+        wasComposing = false
 
         if characters.lowercased() == "d", modifiers == .option {
             keyHandler?.startDictation(in: self)
@@ -1036,12 +1053,15 @@ final class DropSafeNSTextView: NSTextView {
         }
 
         if isReturn && modifiers.isEmpty {
-            // Swallow the extra Return that often follows IME candidate confirm
-            // (hasMarkedText is already false by then).
-            let sinceIME = ProcessInfo.processInfo.systemUptime - lastCompositionEndedAt
-            if sinceIME >= 0, sinceIME < Self.postIMECommitSendGuard {
+            let now = ProcessInfo.processInfo.systemUptime
+            if now < swallowReturnUntilUptime {
+                // Duplicate Return from IME candidate confirm — ignore once.
+                swallowReturnUntilUptime = 0
                 return
             }
+            swallowReturnUntilUptime = 0
+            // Flush AppKit text into the SwiftUI binding before send.
+            keyHandler?.syncComposerText(string)
             keyHandler?.send()
             return
         }
