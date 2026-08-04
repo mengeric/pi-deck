@@ -249,9 +249,28 @@ enum L10n {
 
         let loaded = loadTable(for: language)
         cacheLock.lock()
-        tableCache[cacheKey] = loaded
+        // Never permanently cache an empty table — a race / incomplete bundle
+        // would freeze the UI on raw keys (session.title, composer.context, …)
+        // until process restart.
+        if !loaded.isEmpty {
+            tableCache[cacheKey] = loaded
+        }
         cacheLock.unlock()
+        if loaded.isEmpty {
+            NSLog(
+                "[L10n] empty Localizable.strings for language=%@ — UI will show raw keys. Check app Contents/Resources/%@.lproj/",
+                language.rawValue,
+                language.lprojCode
+            )
+        }
         return loaded
+    }
+
+    /// Drop cached tables (tests / after detecting a bad install).
+    static func resetCachesForTests() {
+        cacheLock.lock()
+        tableCache.removeAll()
+        cacheLock.unlock()
     }
 
     private static func loadTable(for language: AppLanguage) -> [String: String] {

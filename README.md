@@ -214,6 +214,21 @@ Release 本地包（无 Developer ID 时同样可关签名）：
 # build/Pi-Deck-0.0.1.zip
 ```
 
+### 安装注意（l10n）
+
+若界面出现 **`session.title` / `composer.context` 这类 key 原文**，说明
+`Contents/Resources/*/lproj/Localizable.strings` 丢失（常见于旧版空目录与新版
+App **合并安装**）。请先删除再装：
+
+```bash
+rm -rf "/Applications/Pi Deck.app"
+# 再从 DMG 拖入 Applications，或：
+ditto /path/to/Pi-Deck.app "/Applications/Pi Deck.app"
+xattr -cr "/Applications/Pi Deck.app"
+```
+
+打包脚本会在产出 `.app` 后校验 en / zh-Hans 的 `Localizable.strings` 存在且非空。
+
 ### 未签名包与 Gatekeeper
 
 当前公开构建多为 **无 Developer ID / 未公证**。从 DMG 或 zip 装到 `/Applications` 后，若系统提示「无法验证开发者」或打不开，在终端清除隔离属性：

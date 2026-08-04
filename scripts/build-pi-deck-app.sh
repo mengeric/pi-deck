@@ -202,6 +202,40 @@ else
   echo "==> Reusing $OUT_APP"
 fi
 
+# ---------------------------------------------------------------------------
+# Fail the package if Localizable.strings are missing (shows raw keys in UI).
+# Empty en.lproj / zh-Hans.lproj dirs have shipped before when Finder merged
+# a broken install over a good one — catch it at build time.
+# ---------------------------------------------------------------------------
+verify_l10n_resources() {
+  local app="$1"
+  local label="$2"
+  local missing=0
+  local lang path size
+  for lang in en zh-Hans; do
+    path="$app/Contents/Resources/${lang}.lproj/Localizable.strings"
+    if [[ ! -f "$path" ]]; then
+      echo "error: [$label] missing $path" >&2
+      missing=1
+      continue
+    fi
+    size="$(wc -c < "$path" | tr -d ' ')"
+    if [[ "$size" -lt 1000 ]]; then
+      echo "error: [$label] $path too small (${size} bytes)" >&2
+      missing=1
+      continue
+    fi
+    echo "==> l10n ok: ${lang}.lproj/Localizable.strings (${size} bytes)"
+  done
+  if [[ "$missing" -ne 0 ]]; then
+    echo "error: [$label] Localizable.strings incomplete — UI will show raw keys like session.title" >&2
+    return 1
+  fi
+  return 0
+}
+
+verify_l10n_resources "$OUT_APP" "OUT_APP" || exit 1
+
 VERSION="${VERSION:-}"
 if [[ -z "$VERSION" ]]; then
   VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$OUT_APP/Contents/Info.plist" 2>/dev/null || true)"
