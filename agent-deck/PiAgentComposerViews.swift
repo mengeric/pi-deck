@@ -889,8 +889,8 @@ struct PiAgentDropSafeTextEditor: NSViewRepresentable {
         func syncComposerText(_ text: String) {
             // Keep the binding aligned with the AppKit editor so send does not
             // read a stale empty `composerText` and no-op (felt like "press Enter twice").
-            if parent.text != text {
-                parent.text = text
+            if ComposerReturnSendPolicy.needsSyncBeforeSend(bindingText: parent.text, editorText: text) {
+                parent.text = ComposerReturnSendPolicy.textForSend(bindingText: parent.text, editorText: text)
             }
         }
 
@@ -963,8 +963,6 @@ final class DropSafeNSTextView: NSTextView {
     /// blanket window after every composition (that forced a second Enter to send).
     private var swallowReturnUntilUptime: TimeInterval = 0
     private var wasComposing = false
-    /// Tight window for IME duplicate-Return only (seconds).
-    private static let postIMEDuplicateReturnGuard: TimeInterval = 0.06
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard acceptsDrop(sender.draggingPasteboard) else {
@@ -1003,9 +1001,8 @@ final class DropSafeNSTextView: NSTextView {
     override func unmarkText() {
         super.unmarkText()
         wasComposing = false
-        // Do not arm Return-swallow here: unmarkText also runs when composition
-        // ends via Space/number keys; a long guard after those made the next
-        // Enter a no-op.
+        // Policy forbids arming swallow on unmarkText (Space/number commit).
+        // Intentionally do not arm swallowReturnUntilUptime here.
     }
 
     override func keyDown(with event: NSEvent) {
@@ -1021,11 +1018,12 @@ final class DropSafeNSTextView: NSTextView {
             // Some commits clear marked text inside super.keyDown.
             if !hasMarkedText(), wasComposing {
                 wasComposing = false
-                // Only Return-to-confirm needs a short duplicate-Return shield.
-                if isReturn && modifiers.isEmpty {
-                    swallowReturnUntilUptime =
-                        ProcessInfo.processInfo.systemUptime + Self.postIMEDuplicateReturnGuard
-                }
+                let now = ProcessInfo.processInfo.systemUptime
+                swallowReturnUntilUptime = ComposerReturnSendPolicy.armedSwallowDeadline(
+                    compositionEnded: true,
+                    endedOnPlainReturn: isReturn && modifiers.isEmpty,
+                    now: now
+                )
             }
             return
         }
@@ -1054,14 +1052,20 @@ final class DropSafeNSTextView: NSTextView {
 
         if isReturn && modifiers.isEmpty {
             let now = ProcessInfo.processInfo.systemUptime
-            if now < swallowReturnUntilUptime {
+            if ComposerReturnSendPolicy.shouldSwallowPlainReturn(
+                now: now,
+                swallowUntilUptime: swallowReturnUntilUptime
+            ) {
                 // Duplicate Return from IME candidate confirm — ignore once.
                 swallowReturnUntilUptime = 0
                 return
             }
             swallowReturnUntilUptime = 0
-            // Flush AppKit text into the SwiftUI binding before send.
-            keyHandler?.syncComposerText(string)
+            // Flush live AppKit text into the SwiftUI binding before send.
+            // Return does not fire textDidChange; a stale empty binding no-ops send.
+            keyHandler?.syncComposerText(
+                ComposerReturnSendPolicy.textForSend(bindingText: "", editorText: string)
+            )
             keyHandler?.send()
             return
         }
