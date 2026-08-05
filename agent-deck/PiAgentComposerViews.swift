@@ -297,16 +297,6 @@ struct PiAgentComposerBox: View {
             }
 
             VStack(spacing: 10) {
-                // Extension setStatus / setWidget — lives with the composer footer
-                // (TUI status-bar equivalent), not as transcript cards.
-                if let footerSession {
-                    PiAgentExtensionStatusStrip(
-                        store: viewModel.piAgentSessionStore,
-                        sessionID: footerSession.id
-                    )
-                    .padding(.horizontal, 12)
-                }
-
                 if let footerSession {
                     HStack(spacing: 10) {
                         PiAgentComposerFooterBar(
@@ -430,6 +420,15 @@ struct PiAgentComposerBox: View {
                     }
 
                     Spacer(minLength: 8)
+                }
+
+                // Extension setStatus / setWidget — bottom of composer (TUI status-bar
+                // equivalent). Transparent so it sits under metrics without a chip.
+                if let footerSession {
+                    PiAgentExtensionStatusStrip(
+                        store: viewModel.piAgentSessionStore,
+                        sessionID: footerSession.id
+                    )
                 }
             }
             .padding(.horizontal, 12)
@@ -1905,10 +1904,11 @@ struct PiAgentModelSelection {
     let modelID: String
 }
 
-/// Live extension footer chrome (`setStatus` / `setWidget`) above the metrics row.
+/// Live extension footer chrome (`setStatus` / `setWidget`) at the bottom of the composer.
 ///
 /// Reads chrome from the session store so Observation tracks map + revision updates.
 /// Empty chrome collapses to zero height. Notify stays as transcript soft cards.
+/// Background is transparent (no chip fill/border) so it reads as a thin status line.
 struct PiAgentExtensionStatusStrip: View {
     /// Session store owning `extensionChromeBySessionID`. Required.
     var store: PiAgentSessionStore
@@ -1930,16 +1930,16 @@ struct PiAgentExtensionStatusStrip: View {
         if chrome.isEmpty {
             EmptyView()
         } else {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
                 if !chrome.statusItems.isEmpty {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Image(systemName: "dot.radiowaves.left.and.right")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(AppTheme.brandAccent)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(AppTheme.mutedText)
                             .accessibilityHidden(true)
                         Text(statusLine(for: chrome))
-                            .font(AppTheme.Font.caption.monospaced())
-                            .foregroundStyle(.primary)
+                            .font(AppTheme.Font.caption2.monospaced())
+                            .foregroundStyle(AppTheme.mutedText)
                             .lineLimit(2)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
@@ -1949,34 +1949,26 @@ struct PiAgentExtensionStatusStrip: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(item.key)
                             .font(AppTheme.Font.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(AppTheme.mutedText.opacity(0.85))
                         ForEach(Array(item.lines.prefix(maxWidgetLines).enumerated()), id: \.offset) { _, line in
                             Text(line)
-                                .font(AppTheme.Font.caption.monospaced())
-                                .foregroundStyle(.primary)
+                                .font(AppTheme.Font.caption2.monospaced())
+                                .foregroundStyle(AppTheme.mutedText)
                                 .lineLimit(2)
                                 .textSelection(.enabled)
                         }
                         if item.lines.count > maxWidgetLines {
                             Text(languageStore.t("extensionChrome.moreLines", item.lines.count - maxWidgetLines))
                                 .font(AppTheme.Font.caption2)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(AppTheme.mutedText.opacity(0.75))
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.top, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(AppTheme.brandAccent.opacity(0.08))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(AppTheme.brandAccent.opacity(0.22), lineWidth: 1)
-            )
+            .background(Color.clear)
             .accessibilityElement(children: .combine)
             .accessibilityLabel(languageStore.t("extensionChrome.a11y"))
             .accessibilityValue(accessibilitySummary(for: chrome))
