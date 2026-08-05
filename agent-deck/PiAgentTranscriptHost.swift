@@ -15,6 +15,8 @@ struct PiAgentTranscriptHost: View {
     let bottomScrollRequest: Int
     let makeItems: () -> [PiAgentAppKitTranscriptItem]
     let onPinnedToBottomChange: (Bool) -> Void
+    /// User scrolled near the top while older pages exist — load one more page.
+    var onNearTopLoadEarlier: (() -> Void)? = nil
     let onBenchAdvanceSession: () -> Void
     let benchSessionCount: () -> Int
 
@@ -30,6 +32,7 @@ struct PiAgentTranscriptHost: View {
             bottomScrollRequest: bottomScrollRequest,
             onPinnedToBottomChange: onPinnedToBottomChange,
             onScrollingChange: { [cache] scrolling in cache.setUserScrolling(scrolling) },
+            onNearTopLoadEarlier: onNearTopLoadEarlier,
             onBenchAdvanceSession: onBenchAdvanceSession,
             benchSessionCount: benchSessionCount
         )

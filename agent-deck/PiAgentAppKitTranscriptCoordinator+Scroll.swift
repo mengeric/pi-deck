@@ -223,6 +223,22 @@ extension PiAgentAppKitTranscriptView.Coordinator {
         followGlideTimer = nil
     }
 
+    /// When the user scrolls near the document top, ask the host to expand the
+    /// recent-window (prepend earlier threads). Coalesced + only for user scrolls.
+    ///
+    /// - Parameter scrollView: Live transcript scroll view. Required.
+    func maybeRequestEarlierTranscriptPage(_ scrollView: NSScrollView) {
+        guard onNearTopLoadEarlier != nil else { return }
+        guard !isProgrammaticScroll else { return }
+        guard !isAutoFollowing else { return }
+        let clipY = scrollView.contentView.bounds.origin.y
+        guard clipY <= nearTopLoadEarlierThreshold else { return }
+        let now = CACurrentMediaTime()
+        guard now - lastNearTopLoadEarlierTime >= nearTopLoadEarlierCooldown else { return }
+        lastNearTopLoadEarlierTime = now
+        onNearTopLoadEarlier?()
+    }
+
     func isPinnedToBottom(_ scrollView: NSScrollView) -> Bool {
         guard let documentView = scrollView.documentView else { return true }
         let maxY = max(0, documentView.bounds.height - scrollView.contentView.bounds.height)

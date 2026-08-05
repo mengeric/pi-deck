@@ -77,6 +77,10 @@ struct PiAgentScreen: View {
     @State var transcriptPinnedState = TranscriptPinnedState()
     @State var showArchivedPreCompactionTranscript = false
     @State var isEarlierTranscriptSheetPresented = false
+    /// How many recent timeline threads are mounted in the main transcript.
+    /// Starts at `recentTranscriptTimelineItemLimit` and grows by that page size
+    /// when the user loads earlier history (button or scroll-to-top).
+    @State var transcriptVisibleWindowCount = 10
     @State var cachedSections: [PiAgentSessionListSection] = []
     @State var hasBuiltVisibleSessions = false
     @State var sessionScrollRequest: UUID?
@@ -101,8 +105,8 @@ struct PiAgentScreen: View {
     // middle column mid-drag) until the drag ends and the table re-lays out.
     @State var isColumnResizing = false
 
-    // Keep long sessions cheap to relayout when side panels open; older visible items remain accessible separately.
-    let recentTranscriptTimelineItemLimit = 50
+    /// Default / page size for transcript windowing (latest N threads first).
+    let recentTranscriptTimelineItemLimit = 10
 
     var body: some View {
         HStack(spacing: 0) {
@@ -247,6 +251,8 @@ struct PiAgentScreen: View {
             resetTranscriptAutoScroll()
             showArchivedPreCompactionTranscript = false
             isEarlierTranscriptSheetPresented = false
+            // Fresh session always starts on the latest page of threads.
+            transcriptVisibleWindowCount = recentTranscriptTimelineItemLimit
             syncRuntimeFooterSnapshot()
             resetSlashComposerState()
             // Loading and cache hydration publish observable state. Schedule the

@@ -21,6 +21,8 @@ struct PiAgentAppKitTranscriptView: NSViewRepresentable {
     /// Called as the user starts/stops scrolling history; the cache uses it to
     /// defer streaming pulses (and the scaffold relayout they cause) until settle.
     let onScrollingChange: (Bool) -> Void
+    /// Fired when the user scrolls near the document top (history pagination).
+    var onNearTopLoadEarlier: (() -> Void)? = nil
     /// Advance selection to the next session (the ⌘] action). Used only by the
     /// scroll benchmark to sweep multiple chats; nil disables multi-session.
     var onBenchAdvanceSession: (() -> Void)?
@@ -110,6 +112,7 @@ struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         context.coordinator.onBenchAdvanceSession = onBenchAdvanceSession
         context.coordinator.benchSessionCount = benchSessionCount
         context.coordinator.onScrollingChange = onScrollingChange
+        context.coordinator.onNearTopLoadEarlier = onNearTopLoadEarlier
         context.coordinator.setupDataSource(for: tableView)
         context.coordinator.setupScrollObservation(scrollView)
         context.coordinator.updateColumnWidthIfNeeded()
@@ -141,6 +144,7 @@ struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 coordinator.onBenchAdvanceSession = onBenchAdvanceSession
                 coordinator.benchSessionCount = benchSessionCount
                 coordinator.onScrollingChange = onScrollingChange
+                coordinator.onNearTopLoadEarlier = onNearTopLoadEarlier
                 coordinator.updateColumnWidthIfNeeded()
             }
             coordinator.isInsideNSViewUpdate = true
@@ -397,7 +401,14 @@ struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         /// (user scroll away, return to bottom, send, session switch) is covered.
         var onScrollingChange: ((Bool) -> Void)?
 
+        /// Host loads the next earlier transcript page when the user nears the top.
+        var onNearTopLoadEarlier: (() -> Void)?
 
+        /// Coalesce near-top pagination so one gesture does not fire many pages.
+        var lastNearTopLoadEarlierTime: CFTimeInterval = 0
+        let nearTopLoadEarlierCooldown: CFTimeInterval = 0.45
+        /// Distance from document top (points) that counts as “near top”.
+        let nearTopLoadEarlierThreshold: CGFloat = 96
 
         var prewarmQueue: [String] = []
         var prewarmScheduled = false

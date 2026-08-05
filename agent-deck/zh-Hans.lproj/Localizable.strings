@@ -1700,6 +1700,7 @@
 "agent.noTranscriptBody" = "在下方发送消息以启动此会话的 Pi Agent。";
 "agent.earlierHidden" = "更早的 transcript 已隐藏";
 "agent.openEarlier" = "打开更早的 transcript";
+"agent.loadEarlierPage" = "加载更早";
 "agent.earlierTitle" = "更早的 Transcript";
 "agent.earlierBody" = "最新 %d 条可见项之前的消息。";
 "agent.loopUnavailable" = "Loop 不可用";

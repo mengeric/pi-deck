@@ -1701,6 +1701,7 @@
 "agent.noTranscriptBody" = "Send a message below to launch Pi Agent for this session.";
 "agent.earlierHidden" = "Earlier transcript hidden";
 "agent.openEarlier" = "Open Earlier Transcript";
+"agent.loadEarlierPage" = "Load earlier";
 "agent.earlierTitle" = "Earlier Transcript";
 "agent.earlierBody" = "Messages before the latest %d visible items.";
 "agent.loopUnavailable" = "Loop Unavailable";

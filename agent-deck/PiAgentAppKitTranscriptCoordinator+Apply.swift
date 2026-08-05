@@ -52,6 +52,7 @@ extension PiAgentAppKitTranscriptView.Coordinator {
                     self.pendingGlideLandingSettleWork?.cancel()
                     self.pendingGlideLandingSettleWork = nil
                     self.pendingScrollSettle = false
+                    self.maybeRequestEarlierTranscriptPage(scrollView)
                 }
                 // Clip-view bounds change before the scrollView frame notification fires,
                 // so resync column width here to avoid a one-frame horizontal overflow

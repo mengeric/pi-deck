@@ -158,6 +158,11 @@ extension PiAgentScreen {
             onPinnedToBottomChange: { isPinnedToBottom in
                 transcriptPinnedState.isPinned = isPinnedToBottom
             },
+            onNearTopLoadEarlier: {
+                // Only page while older threads remain behind the window.
+                guard transcriptTimelineSnapshot.recentWindowArchive != nil else { return }
+                loadEarlierTranscriptPage()
+            },
             onBenchAdvanceSession: { viewModel.selectNextPiAgentSession() },
             benchSessionCount: { viewModel.scopedPiAgentSessionsInOrder().count }
         )

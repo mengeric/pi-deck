@@ -48,6 +48,7 @@ extension PiAgentScreen {
         hasher.combine(appKitTranscriptChromeRevision(snapshot: snapshot))
         hasher.combine(appKitTranscriptThreadContextRevision(snapshot: snapshot))
         hasher.combine(showArchivedPreCompactionTranscript)
+        hasher.combine(transcriptVisibleWindowCount)
         if let session = store.selectedSession {
             hasher.combine(viewModel.displayAgentsRevision)
             hasher.combine(session.commandInvocations)         // slash-command chrome
@@ -198,9 +199,10 @@ extension PiAgentScreen {
             var hasher = Hasher()
             hasher.combine(archive.hiddenCount)
             hasher.combine(archive.limit)
+            hasher.combine(transcriptVisibleWindowCount)
             let recentPayload = NativeArchiveNoticePayload.recentWindow(
                 hiddenCount: archive.hiddenCount, limit: archive.limit,
-                onOpen: { isEarlierTranscriptSheetPresented = true })
+                onOpen: { loadEarlierTranscriptPage() })
             descriptors.append(PiAgentTranscriptBlockDescriptor(
                 id: "recent-window-archive",
                 view: nil,

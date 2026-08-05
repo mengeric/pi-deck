@@ -51,16 +51,18 @@ extension PiAgentScreen {
         }
         let earlierVisibleItems: [PiAgentTranscriptTimelineItem]
         let mainVisibleItems: [PiAgentTranscriptTimelineItem]
-        if !showArchivedPreCompactionTranscript && visibleItems.count > recentTranscriptTimelineItemLimit {
-            earlierVisibleItems = Array(visibleItems.dropLast(recentTranscriptTimelineItemLimit))
-            mainVisibleItems = Array(visibleItems.suffix(recentTranscriptTimelineItemLimit))
+        // Window size grows via load-earlier (page = recentTranscriptTimelineItemLimit).
+        let windowLimit = max(recentTranscriptTimelineItemLimit, transcriptVisibleWindowCount)
+        if !showArchivedPreCompactionTranscript && visibleItems.count > windowLimit {
+            earlierVisibleItems = Array(visibleItems.dropLast(windowLimit))
+            mainVisibleItems = Array(visibleItems.suffix(windowLimit))
         } else {
             earlierVisibleItems = []
             mainVisibleItems = visibleItems
         }
         let recentWindowArchive = earlierVisibleItems.isEmpty
             ? nil
-            : (hiddenCount: earlierVisibleItems.count, limit: recentTranscriptTimelineItemLimit)
+            : (hiddenCount: earlierVisibleItems.count, limit: windowLimit)
         return PiAgentTranscriptTimelineSnapshot(
             allItems: items,
             visibleItems: visibleItems,
@@ -69,6 +71,22 @@ extension PiAgentScreen {
             preCompactionArchive: archiveNotice,
             recentWindowArchive: recentWindowArchive
         )
+    }
+
+    /// Expand the main transcript window by one page of earlier threads.
+    ///
+    /// - Parameter totalVisibleCount: Full post-compaction timeline length, used to cap.
+    /// - Returns: `true` if the window grew.
+    @discardableResult
+    func loadEarlierTranscriptPage(totalVisibleCount: Int? = nil) -> Bool {
+        let total = totalVisibleCount
+            ?? transcriptTimelineSnapshot.visibleItems.count
+        guard total > transcriptVisibleWindowCount else { return false }
+        let page = max(1, recentTranscriptTimelineItemLimit)
+        let next = min(total, transcriptVisibleWindowCount + page)
+        guard next > transcriptVisibleWindowCount else { return false }
+        transcriptVisibleWindowCount = next
+        return true
     }
 
     var transcriptTimelineItems: [PiAgentTranscriptTimelineItem] {
@@ -148,8 +166,8 @@ extension PiAgentScreen {
                     .foregroundStyle(AppTheme.mutedText)
             }
             Spacer(minLength: 0)
-            Button(LanguageStore.shared.t("agent.openEarlier")) {
-                isEarlierTranscriptSheetPresented = true
+            Button(LanguageStore.shared.t("agent.loadEarlierPage")) {
+                loadEarlierTranscriptPage()
             }
             .buttonStyle(.borderless)
             .font(AppTheme.Font.caption.weight(.semibold))

@@ -459,12 +459,11 @@ extension NativeArchiveNoticePayload {
         limit: Int,
         onOpen: @escaping () -> Void
     ) -> NativeArchiveNoticePayload {
-        let plural = hiddenCount == 1 ? "" : "s"
         return NativeArchiveNoticePayload(
             icon: "clock.arrow.circlepath",
             title: LanguageStore.shared.t("agent.earlierHidden"),
-            detail: "Showing the latest \(limit) items to keep this chat responsive. \(hiddenCount) earlier item\(plural) are available.",
-            actionTitle: "Open Earlier Transcript",
+            detail: LanguageStore.shared.t("agent.showingLatestFmt2", limit, hiddenCount),
+            actionTitle: LanguageStore.shared.t("agent.loadEarlierPage"),
             action: onOpen,
             stacked: true
         )
