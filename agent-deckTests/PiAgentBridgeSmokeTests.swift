@@ -183,9 +183,10 @@ final class PiAgentBridgeSmokeTests: XCTestCase {
         XCTAssertTrue(failed)
         XCTAssertFalse(FileManager.default.fileExists(atPath: launchLog.path))
         XCTAssertNil(store.sessions.first(where: { $0.id == session.id })?.piSessionFile)
+        let timedOutTitle = LanguageStore.shared.t("run.launchTimedOut")
         XCTAssertTrue((store.transcriptsBySessionID[session.id] ?? []).contains {
-            $0.title == "Launch Timed Out" && $0.text.contains("Pi was not started")
-        })
+            $0.title == timedOutTitle && $0.text.contains("Pi was not started")
+        }, "Expected launch-timeout transcript entry titled \(timedOutTitle)")
 
         discoveryContinuation?.resume()
         try? await Task.sleep(for: .milliseconds(50))
@@ -233,9 +234,10 @@ final class PiAgentBridgeSmokeTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: launchLog.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: stdinLog.path))
         XCTAssertEqual(store.sessions.first(where: { $0.id == session.id })?.status, .stopped)
+        let discardedTitle = LanguageStore.shared.t("run.queuedInputDiscarded")
         XCTAssertTrue((store.transcriptsBySessionID[session.id] ?? []).contains {
-            $0.title == "Queued Input Discarded" && $0.text.contains("1 message was not delivered")
-        })
+            $0.title == discardedTitle && $0.text.contains("1 message was not delivered")
+        }, "Expected discarded-queue transcript entry titled \(discardedTitle)")
     }
 
     func testAttachmentOnlyTranscriptProjectionLeavesCanonicalTextAndRPCPromptsUnchanged() throws {
