@@ -6,15 +6,19 @@ import SwiftUI
 /// Top-level workspace: AppKit `NSSplitView` owns live column geometry.
 ///
 /// Contract:
-/// - Sidebar / chat / review are three arranged subviews (never removed).
-/// - Collapse = thickness 0 via `setPosition`, **not** `isHidden` (hidden
-///   arranged subviews make NSSplitView drop panes permanently).
+/// - Sidebar / chat / trailing strip are three arranged subviews (never removed).
+/// - The trailing **activity rail is always visible** (fixed width when Review body
+///   is collapsed). Expand/collapse only changes Review *body* width.
+/// - Collapse of Review body uses a narrow rail width via `setPosition`, **not**
+///   `isHidden` (hidden arranged subviews make NSSplitView drop panes permanently).
 /// - Initial positions are applied when the split first receives a real width
 ///   (SwiftUI often mounts the representable at 0×0).
 /// - Fractions persist via `ThreeColumnLayout`.
-/// - Below `threeColumnMinHost`, Review is a SwiftUI trailing overlay, not a pane.
+/// - Below `threeColumnMinHost`, the trailing strip is a SwiftUI overlay (rail
+///   always; full body width when expanded).
 struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
     var isSidebarVisible: Bool = true
+    /// Whether the Review *body* is open (rail is always shown).
     var isReviewExpanded: Bool
     @Binding var sidebarFraction: CGFloat
     @Binding var reviewFraction: CGFloat
@@ -32,19 +36,22 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
         hostWidth > 1 ? hostWidth : 1400
     }
 
-    private var dockReviewInSplit: Bool {
-        isReviewExpanded && currentHost >= ThreeColumnLayout.threeColumnMinHost
+    /// Wide enough to dock the trailing strip as a real split pane.
+    private var dockTrailingInSplit: Bool {
+        currentHost >= ThreeColumnLayout.threeColumnMinHost
     }
 
-    private var showReviewOverlay: Bool {
-        isReviewExpanded && !dockReviewInSplit
+    /// Narrow windows: trailing strip as overlay (rail always, body when expanded).
+    private var showTrailingOverlay: Bool {
+        !dockTrailingInSplit
     }
 
     var body: some View {
         ZStack(alignment: .trailing) {
             WorkspaceNSSplitRepresentable(
                 isSidebarVisible: isSidebarVisible,
-                isReviewDocked: dockReviewInSplit,
+                isTrailingDocked: dockTrailingInSplit,
+                isReviewExpanded: isReviewExpanded,
                 paneRootEpoch: paneRootEpoch,
                 sidebarFraction: $sidebarFraction,
                 reviewFraction: $reviewFraction,
@@ -63,10 +70,10 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if showReviewOverlay {
+            if showTrailingOverlay {
                 panel()
                     .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-                    .frame(width: overlayReviewWidth)
+                    .frame(width: overlayTrailingWidth)
                     .background(AppTheme.windowBackground)
                     .overlay(alignment: .leading) {
                         Rectangle()
@@ -74,8 +81,7 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
                             .frame(width: 1)
                             .allowsHitTesting(false)
                     }
-                    .shadow(color: .black.opacity(0.28), radius: 18, x: -4, y: 0)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .shadow(color: .black.opacity(isReviewExpanded ? 0.28 : 0.12), radius: isReviewExpanded ? 18 : 6, x: -4, y: 0)
                     .zIndex(40)
             }
         }
@@ -92,7 +98,11 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
         }
     }
 
-    private var overlayReviewWidth: CGFloat {
+    /// Overlay width: full review when expanded, fixed rail when collapsed.
+    private var overlayTrailingWidth: CGFloat {
+        guard isReviewExpanded else {
+            return ThreeColumnLayout.trailingRailWidth
+        }
         let h = max(1, currentHost)
         let f = min(
             ThreeColumnLayout.overlayReviewMaxFraction,
@@ -116,7 +126,10 @@ protocol WorkspaceSplitCoordinating: AnyObject {
 
 private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: View>: NSViewRepresentable {
     var isSidebarVisible: Bool
-    var isReviewDocked: Bool
+    /// Trailing strip docked as a split pane (wide host).
+    var isTrailingDocked: Bool
+    /// Review body open (false → strip is rail-only width).
+    var isReviewExpanded: Bool
     var paneRootEpoch: Int
     @Binding var sidebarFraction: CGFloat
     @Binding var reviewFraction: CGFloat
@@ -164,7 +177,8 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
         split.setHoldingPriority(NSLayoutConstraint.Priority(rawValue: 260), forSubviewAt: 2)
 
         context.coordinator.lastSidebarVisible = isSidebarVisible
-        context.coordinator.lastReviewDocked = isReviewDocked
+        context.coordinator.lastTrailingDocked = isTrailingDocked
+        context.coordinator.lastReviewExpanded = isReviewExpanded
         context.coordinator.installedPaneRootEpoch = paneRootEpoch
         // Real positions applied on first non-zero layout (see splitViewBoundsDidChange).
         return split
@@ -188,10 +202,12 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
 
         let visChanged =
             context.coordinator.lastSidebarVisible != isSidebarVisible
-            || context.coordinator.lastReviewDocked != isReviewDocked
+            || context.coordinator.lastTrailingDocked != isTrailingDocked
+            || context.coordinator.lastReviewExpanded != isReviewExpanded
 
         context.coordinator.lastSidebarVisible = isSidebarVisible
-        context.coordinator.lastReviewDocked = isReviewDocked
+        context.coordinator.lastTrailingDocked = isTrailingDocked
+        context.coordinator.lastReviewExpanded = isReviewExpanded
 
         if visChanged {
             context.coordinator.needsReapplyPositions = true
@@ -214,7 +230,10 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
         var panelHost: NSHostingView<AnyView>?
 
         var lastSidebarVisible = true
-        var lastReviewDocked = false
+        /// Trailing strip is a docked split pane (wide host).
+        var lastTrailingDocked = false
+        /// Review body open (false → rail-only strip width).
+        var lastReviewExpanded = false
         var isUserDragging = false
         var needsReapplyPositions = true
         /// Last `paneRootEpoch` applied to the three `NSHostingView`s.
@@ -268,10 +287,19 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
                 sideW = max(sideW, content * ThreeColumnLayout.sidebarMin)
             }
 
-            var revW: CGFloat = lastReviewDocked ? max(280, content * revF) : 0
-            if lastReviewDocked {
-                revW = min(revW, content * ThreeColumnLayout.reviewMax)
-                revW = max(revW, content * ThreeColumnLayout.reviewMin)
+            // Trailing strip always keeps at least the fixed rail width when docked.
+            // Expanded Review uses the user fraction; collapsed is rail-only.
+            var revW: CGFloat = 0
+            if lastTrailingDocked {
+                if lastReviewExpanded {
+                    revW = max(280, content * revF)
+                    revW = min(revW, content * ThreeColumnLayout.reviewMax)
+                    revW = max(revW, content * ThreeColumnLayout.reviewMin)
+                    // Ensure room for body + rail chrome.
+                    revW = max(revW, ThreeColumnLayout.trailingRailWidth + 160)
+                } else {
+                    revW = ThreeColumnLayout.trailingRailWidth
+                }
             }
 
             // Protect chat residual.
@@ -320,8 +348,8 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
                 // Allow full collapse when sidebar hidden; soft floor when visible.
                 return lastSidebarVisible ? total * 0.10 : 0
             }
-            // Min main width ≈ chatMin when review open.
-            if lastReviewDocked {
+            // Min main width ≈ chatMin when trailing strip is docked.
+            if lastTrailingDocked {
                 let side = sidebarHost?.frame.width ?? 0
                 return side + total * ThreeColumnLayout.chatMinFraction * 0.5
             }
@@ -337,8 +365,12 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
             if dividerIndex == 0 {
                 return lastSidebarVisible ? total * ThreeColumnLayout.sidebarMax : 0
             }
-            if lastReviewDocked {
-                return total - total * ThreeColumnLayout.reviewMin * 0.5
+            if lastTrailingDocked {
+                if lastReviewExpanded {
+                    return total - total * ThreeColumnLayout.reviewMin * 0.5
+                }
+                // Collapsed: lock strip to rail width (divider cannot steal chat).
+                return total - ThreeColumnLayout.trailingRailWidth - splitView.dividerThickness
             }
             return total
         }
@@ -393,7 +425,8 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
                     lastAppliedSideF = f
                 }
             }
-            if lastReviewDocked, revW > 8 {
+            // Only persist fraction while the Review body is expanded (rail-only width is fixed).
+            if lastTrailingDocked, lastReviewExpanded, revW > ThreeColumnLayout.trailingRailWidth + 40 {
                 let f = ThreeColumnLayout.clampedReview(revW / content)
                 if abs(f - reviewFraction.wrappedValue) > 0.001 {
                     reviewFraction.wrappedValue = f

@@ -5,10 +5,8 @@ import SwiftUI
 
 /// Tools available in the trailing inspector (right column).
 ///
-/// Rail interaction:
-/// - **Not expanded** → toolbar / open path expands Review (`toggleTrailingInspector`).
-/// - **Expanded + click active tool** → collapses the whole trailing column.
-/// - **Expanded + click other tool** → switches body (future multi-tool).
+/// The vertical **rail is fixed** (always on screen). Expand/collapse only shows
+/// or hides the Review *body* beside the rail.
 enum TrailingInspectorTool: String, CaseIterable, Identifiable, Hashable {
     /// Git changes + OSS diff preview.
     case review
@@ -51,29 +49,34 @@ enum TrailingInspectorTool: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-/// Host for the trailing column: `[ body | icon rail ]`.
+/// Host for the trailing column: optional body + **always-visible** git rail.
 ///
 /// - Parameter viewModel: Shared app model (git, session, selected tool).
 struct TrailingInspectorHost: View {
     @Bindable var viewModel: AppViewModel
     @ObservedObject private var languageStore = LanguageStore.shared
 
-    private let railWidth: CGFloat = 40
+    private let railWidth: CGFloat = ThreeColumnLayout.trailingRailWidth - 4
 
     var body: some View {
         HStack(spacing: 0) {
-            toolBody
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if viewModel.isTrailingInspectorExpanded {
+                toolBody
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
 
-            Rectangle()
-                .fill(AppTheme.hairlineStroke.opacity(0.55))
-                .frame(width: 1)
-                .padding(.vertical, 6)
+                Rectangle()
+                    .fill(AppTheme.hairlineStroke.opacity(0.55))
+                    .frame(width: 1)
+                    .padding(.vertical, 6)
+            }
 
+            // Fixed rail — never removed when Review body collapses.
             toolRail
                 .frame(width: railWidth)
                 .padding(.vertical, 8)
         }
+        .animation(.spring(response: 0.42, dampingFraction: 0.86), value: viewModel.isTrailingInspectorExpanded)
         .background(AppTheme.windowBackground)
         .onAppear {
             // Migrate away from removed tools (e.g. former `.memory`).
@@ -85,11 +88,18 @@ struct TrailingInspectorHost: View {
                 viewModel.trailingInspectorTool = .review
                 TrailingInspectorTool.save(.review)
             }
-            viewModel.prepareRepoChangesForSelectedPiAgentSession(force: false)
+            if viewModel.isTrailingInspectorExpanded {
+                viewModel.prepareRepoChangesForSelectedPiAgentSession(force: false)
+            }
         }
         .onChange(of: viewModel.trailingInspectorTool) { _, tool in
             TrailingInspectorTool.save(tool)
-            if tool == .review {
+            if tool == .review, viewModel.isTrailingInspectorExpanded {
+                viewModel.prepareRepoChangesForSelectedPiAgentSession(force: false)
+            }
+        }
+        .onChange(of: viewModel.isTrailingInspectorExpanded) { _, expanded in
+            if expanded {
                 viewModel.prepareRepoChangesForSelectedPiAgentSession(force: false)
             }
         }
@@ -109,37 +119,16 @@ struct TrailingInspectorHost: View {
                 railButton(tool)
             }
             Spacer(minLength: 0)
-            // Explicit hide control — same glyph as toolbar “Review”.
-            collapseRailButton
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(languageStore.t("inspector.rail.a11y"))
     }
 
-    /// Hides the trailing inspector column (Review closed).
-    private var collapseRailButton: some View {
-        Button {
-            viewModel.collapseTrailingInspector()
-        } label: {
-            Image(systemName: "sidebar.trailing")
-                .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(AppTheme.mutedText)
-                .frame(width: 28, height: 28)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color.clear)
-                )
-        }
-        .buttonStyle(.plain)
-        .help(languageStore.t("inspector.rail.hide"))
-        .accessibilityLabel(languageStore.t("inspector.rail.hide"))
-    }
-
     /// Builds one rail icon button for a tool.
     ///
-    /// Clicking the **already-selected** tool while expanded **collapses** the
-    /// trailing column (toggle). Clicking another tool switches the body.
+    /// - Expanded + active tool → collapse Review body (rail stays).
+    /// - Collapsed → expand Review body.
     ///
     /// - Parameter tool: Target tool.
     /// - Returns: Styled circular icon control.
@@ -175,31 +164,33 @@ struct TrailingInspectorHost: View {
             )
         }
         .buttonStyle(.plain)
-        .help(languageStore.t(tool.l10nKey))
+        .help(
+            selected
+                ? languageStore.t("inspector.rail.hide")
+                : languageStore.t(tool.l10nKey)
+        )
         .accessibilityLabel(languageStore.t(tool.l10nKey))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityHint(languageStore.t("inspector.rail.toggleHint"))
     }
 
-    /// Selects a tool, or collapses when the active expanded tool is clicked again.
+    /// Selects a tool, or toggles Review body when the active tool is clicked.
     ///
     /// - Parameter tool: Rail tool that was activated.
     private func selectOrToggle(_ tool: TrailingInspectorTool) {
         if viewModel.isTrailingInspectorExpanded,
            viewModel.trailingInspectorTool == tool {
-            // Shown → hide.
+            // Body shown → hide body (rail remains).
             viewModel.collapseTrailingInspector()
             return
         }
-        // Not expanded, or switching tools → expand + select.
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
-            viewModel.trailingInspectorTool = tool
-            TrailingInspectorTool.save(tool)
-            if !viewModel.isTrailingInspectorExpanded {
-                viewModel.openRepoChangesForSelectedPiAgentSession()
-            } else if tool == .review {
-                viewModel.prepareRepoChangesForSelectedPiAgentSession(force: false)
-            }
+        // Body hidden, or switching tools → expand + select.
+        viewModel.trailingInspectorTool = tool
+        TrailingInspectorTool.save(tool)
+        if !viewModel.isTrailingInspectorExpanded {
+            viewModel.openRepoChangesForSelectedPiAgentSession()
+        } else if tool == .review {
+            viewModel.prepareRepoChangesForSelectedPiAgentSession(force: false)
         }
     }
 }
