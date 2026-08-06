@@ -823,15 +823,9 @@ struct PiAgentRepoReviewPanel: View {
                         layout: .fill
                     )
                 } else if let text = viewModel.repositorySelectedDiffText {
-                    // Phase 0: prefer open-source gitdiff; legacy FullFileDiffView via defaults key.
-                    Group {
-                        if GitDiffOSSView.prefersGitdiffRenderer {
-                            GitDiffOSSView(diffText: text)
-                        } else {
-                            FullFileDiffView(diffText: text)
-                        }
-                    }
-                    .clipShape(Rectangle())
+                    // Phase 0: hard-wire OSS gitdiff (no legacy branch) so we can verify the package path.
+                    GitDiffOSSView(diffText: text)
+                        .clipShape(Rectangle())
                 } else if let error = viewModel.repositoryLastError {
                     Text(error)
                         .font(AppTheme.Font.caption)

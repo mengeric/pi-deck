@@ -28,9 +28,9 @@ struct GitDiffOSSView: View {
     }
 
     var body: some View {
+        // Path bar already shows the file name — hide redundant file headers from the package.
         DiffRenderer(diffText: diffText)
             .diffTheme(resolvedTheme)
-            // Review already shows the path in the file path bar — hide redundant file headers.
             .diffFileHeaders(false)
             .diffHunkHeaders(true)
             .diffLineNumberStyle(.dual)

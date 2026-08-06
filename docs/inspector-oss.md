@@ -23,8 +23,8 @@ defaults write works.earendil.pi-deck pi.deck.reviewUseGitdiff -bool true
 ## Acceptance checklist
 
 - [x] macOS build succeeds with `gitdiff`
-- [ ] Unstaged/staged single-file unified diff renders
-- [ ] Dark mode colors readable
+- [x] Unstaged/staged single-file unified diff renders (visual check)
+- [x] Dark mode colors readable (visual check)
 - [ ] Large context (`-U1000000`) does not hang UI
 - [ ] Empty / “no diff” messages still usable
 
@@ -39,3 +39,10 @@ defaults write works.earendil.pi-deck pi.deck.reviewUseGitdiff -bool true
 - Multi-tool rail
 - Deleting FullFileDiffBuilder
 - Replacing GitRepositoryService
+
+
+## Phase 0 result
+
+- Confirmed in UI (2026-08-06): pink identity chips showed `gitdiff OSS` / dual gutter / package headers.
+- Debug chrome removed after verification; Review preview hard-wired to `GitDiffOSSView` (`DiffRenderer`).
+- Legacy `FullFileDiffView` remains in source for emergency reference only (not linked from preview).
