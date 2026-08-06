@@ -3,15 +3,16 @@ import SwiftUI
 
 // MARK: - Public SwiftUI host
 
-/// Top-level workspace: **AppKit `NSSplitView` owns live column geometry**.
+/// Top-level workspace: AppKit `NSSplitView` owns live column geometry.
 ///
-/// Replaces the hand-rolled SwiftUI `HStack` + `DragGesture` host:
-/// - System split keeps panes painted while the sash moves (no black overlays).
-/// - Holding priorities + thickness constraints replace hard min-width fights.
-/// - SwiftUI children only fill their pane; they never assign absolute column widths.
-///
-/// Fractions still load/save via `ThreeColumnLayout`. Narrow hosts open Review as
-/// a trailing overlay instead of a third split pane.
+/// Contract:
+/// - Sidebar / chat / review are three arranged subviews (never removed).
+/// - Collapse = thickness 0 via `setPosition`, **not** `isHidden` (hidden
+///   arranged subviews make NSSplitView drop panes permanently).
+/// - Initial positions are applied when the split first receives a real width
+///   (SwiftUI often mounts the representable at 0×0).
+/// - Fractions persist via `ThreeColumnLayout`.
+/// - Below `threeColumnMinHost`, Review is a SwiftUI trailing overlay, not a pane.
 struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
     var isSidebarVisible: Bool = true
     var isReviewExpanded: Bool
@@ -42,15 +43,24 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
                 isReviewDocked: dockReviewInSplit,
                 sidebarFraction: $sidebarFraction,
                 reviewFraction: $reviewFraction,
-                sidebar: { sidebar().frame(maxWidth: .infinity, maxHeight: .infinity) },
-                main: { main().frame(maxWidth: .infinity, maxHeight: .infinity) },
-                panel: { panel().frame(maxWidth: .infinity, maxHeight: .infinity) }
+                sidebar: {
+                    sidebar()
+                        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                },
+                main: {
+                    main()
+                        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                },
+                panel: {
+                    panel()
+                        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if showReviewOverlay {
                 panel()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
                     .frame(width: overlayReviewWidth)
                     .background(AppTheme.windowBackground)
                     .overlay(alignment: .leading) {
@@ -71,19 +81,9 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
                     .onChange(of: geo.size.width) { _, w in hostWidth = w }
             }
         )
-        .onChange(of: isReviewExpanded) { _, _ in
-            postChatWidthFromFractions(final: true)
-        }
-        .onChange(of: isSidebarVisible) { _, _ in
-            postChatWidthFromFractions(final: true)
-        }
-        .onChange(of: hostWidth) { _, _ in
-            postChatWidthFromFractions(final: true)
-        }
         .onAppear {
             sidebarFraction = ThreeColumnLayout.clampedSidebar(sidebarFraction)
             reviewFraction = ThreeColumnLayout.clampedReview(reviewFraction)
-            postChatWidthFromFractions(final: true)
         }
     }
 
@@ -95,31 +95,16 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
         )
         return min(h * 0.92, max(h * ThreeColumnLayout.overlayReviewMinFraction, h * f))
     }
-
-    private func postChatWidthFromFractions(final: Bool) {
-        let r = ThreeColumnLayout.resolved(
-            host: currentHost,
-            sidebarVisible: isSidebarVisible,
-            reviewExpanded: isReviewExpanded,
-            sidebarFraction: sidebarFraction,
-            reviewFraction: reviewFraction
-        )
-        NotificationCenter.default.post(
-            name: .transcriptColumnLiveResizeWidth,
-            object: nil,
-            userInfo: [
-                "width": max(1, r.chatWidth),
-                "final": final
-            ]
-        )
-    }
 }
 
-// MARK: - Split coordination protocol
+// MARK: - Coordination
 
 @MainActor
 protocol WorkspaceSplitCoordinating: AnyObject {
     func userDidEndLiveResize()
+    /// Called from `layout` when the split gains a real width for the first time
+    /// (or after a large host resize).
+    func splitViewBoundsDidChange(to width: CGFloat)
 }
 
 // MARK: - NSSplitView bridge
@@ -147,8 +132,10 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
         let panelHost = NSHostingView(rootView: AnyView(panel()))
 
         for host in [sideHost, mainHost, panelHost] {
+            // Critical: allow panes to shrink; never let content dictate column width.
             host.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             host.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            host.translatesAutoresizingMaskIntoConstraints = true
         }
 
         context.coordinator.sidebarHost = sideHost
@@ -158,22 +145,21 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
         split.isVertical = true
         split.dividerStyle = .thin
         split.delegate = context.coordinator
+        // Do not autosave AppKit positions — fractions are the source of truth.
+        split.autosaveName = nil
 
         split.addArrangedSubview(sideHost)
         split.addArrangedSubview(mainHost)
         split.addArrangedSubview(panelHost)
 
-        // Chat is flexible; rails prefer their thickness.
-        split.setHoldingPriority(NSLayoutConstraint.Priority(rawValue: 260), forSubviewAt: 0)
+        // Rails hold; chat absorbs.
+        split.setHoldingPriority(NSLayoutConstraint.Priority(rawValue: 270), forSubviewAt: 0)
         split.setHoldingPriority(NSLayoutConstraint.Priority(rawValue: 1), forSubviewAt: 1)
-        split.setHoldingPriority(NSLayoutConstraint.Priority(rawValue: 250), forSubviewAt: 2)
+        split.setHoldingPriority(NSLayoutConstraint.Priority(rawValue: 260), forSubviewAt: 2)
 
-        context.coordinator.applyVisibility(
-            sidebarVisible: isSidebarVisible,
-            reviewDocked: isReviewDocked,
-            animated: false
-        )
-        context.coordinator.applyFractionsFromBindings(force: true)
+        context.coordinator.lastSidebarVisible = isSidebarVisible
+        context.coordinator.lastReviewDocked = isReviewDocked
+        // Real positions applied on first non-zero layout (see splitViewBoundsDidChange).
         return split
     }
 
@@ -181,6 +167,7 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
         context.coordinator.sidebarFraction = $sidebarFraction
         context.coordinator.reviewFraction = $reviewFraction
 
+        // Refresh SwiftUI trees without remounting hosting views.
         context.coordinator.sidebarHost?.rootView = AnyView(sidebar())
         context.coordinator.mainHost?.rootView = AnyView(main())
         context.coordinator.panelHost?.rootView = AnyView(panel())
@@ -189,15 +176,15 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
             context.coordinator.lastSidebarVisible != isSidebarVisible
             || context.coordinator.lastReviewDocked != isReviewDocked
 
+        context.coordinator.lastSidebarVisible = isSidebarVisible
+        context.coordinator.lastReviewDocked = isReviewDocked
+
         if visChanged {
-            context.coordinator.applyVisibility(
-                sidebarVisible: isSidebarVisible,
-                reviewDocked: isReviewDocked,
-                animated: true
-            )
-            context.coordinator.applyFractionsFromBindings(force: true)
+            context.coordinator.needsReapplyPositions = true
+            context.coordinator.applyPositionsIfPossible(force: true)
         } else if !context.coordinator.isUserDragging {
-            context.coordinator.applyFractionsFromBindings(force: false)
+            // External fraction edits (load on appear).
+            context.coordinator.applyPositionsIfPossible(force: false)
         }
     }
 
@@ -215,50 +202,39 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
         var lastSidebarVisible = true
         var lastReviewDocked = false
         var isUserDragging = false
+        var needsReapplyPositions = true
+
         private var suppressFractionWrite = false
         private var lastAppliedSideF: CGFloat = -1
         private var lastAppliedRevF: CGFloat = -1
+        private var lastLayoutWidth: CGFloat = 0
 
         init(sidebarFraction: Binding<CGFloat>, reviewFraction: Binding<CGFloat>) {
             self.sidebarFraction = sidebarFraction
             self.reviewFraction = reviewFraction
         }
 
-        func applyVisibility(sidebarVisible: Bool, reviewDocked: Bool, animated: Bool) {
-            lastSidebarVisible = sidebarVisible
-            lastReviewDocked = reviewDocked
-            guard let split = splitView else { return }
-
-            let apply = {
-                split.isSidebarCollapsed = !sidebarVisible
-                split.isReviewCollapsed = !reviewDocked
-                self.sidebarHost?.isHidden = !sidebarVisible
-                self.panelHost?.isHidden = !reviewDocked
-                split.needsLayout = true
-                split.layoutSubtreeIfNeeded()
+        func splitViewBoundsDidChange(to width: CGFloat) {
+            let grewFromZero = lastLayoutWidth < 40 && width >= 40
+            let largeResize = abs(width - lastLayoutWidth) > 24
+            lastLayoutWidth = width
+            guard grewFromZero || largeResize || needsReapplyPositions else { return }
+            // Defer out of `layout` — setPosition during layout can recurse.
+            DispatchQueue.main.async { [weak self] in
+                self?.applyPositionsIfPossible(force: true)
             }
-            if animated {
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.18
-                    ctx.allowsImplicitAnimation = true
-                    apply()
-                }
-            } else {
-                apply()
-            }
-            postResizeActive(false)
-            postChatWidth(final: true)
         }
 
-        func applyFractionsFromBindings(force: Bool) {
+        func applyPositionsIfPossible(force: Bool) {
             guard let split = splitView else { return }
             let total = split.bounds.width
-            guard total > 40 else { return }
+            guard total >= 40 else { return }
 
             let sideF = ThreeColumnLayout.clampedSidebar(sidebarFraction.wrappedValue)
             let revF = ThreeColumnLayout.clampedReview(reviewFraction.wrappedValue)
 
             if !force,
+               !needsReapplyPositions,
                abs(sideF - lastAppliedSideF) < 0.002,
                abs(revF - lastAppliedRevF) < 0.002 {
                 return
@@ -267,47 +243,55 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
             suppressFractionWrite = true
             defer { suppressFractionWrite = false }
 
-            let dividerCount =
-                (lastSidebarVisible ? 1 : 0) + (lastReviewDocked ? 1 : 0)
-            let content = max(1, total - CGFloat(dividerCount) * split.dividerThickness)
+            // Content budget ignores two thin dividers always present.
+            let content = max(1, total - 2 * split.dividerThickness)
 
-            var sideW: CGFloat = lastSidebarVisible ? content * sideF : 0
-            var revW: CGFloat = lastReviewDocked ? content * revF : 0
-            if lastSidebarVisible && lastReviewDocked {
-                let maxRails = content * (1 - ThreeColumnLayout.chatMinFraction)
-                let used = sideW + revW
-                if used > maxRails, used > 0 {
-                    let scale = maxRails / used
-                    sideW *= scale
-                    revW *= scale
-                }
-            } else if lastSidebarVisible {
-                sideW = min(sideW, content * (1 - ThreeColumnLayout.chatMinFraction))
+            var sideW: CGFloat = lastSidebarVisible ? max(160, content * sideF) : 0
+            if lastSidebarVisible {
+                sideW = min(sideW, content * ThreeColumnLayout.sidebarMax)
+                sideW = max(sideW, content * ThreeColumnLayout.sidebarMin)
             }
+
+            var revW: CGFloat = lastReviewDocked ? max(280, content * revF) : 0
+            if lastReviewDocked {
+                revW = min(revW, content * ThreeColumnLayout.reviewMax)
+                revW = max(revW, content * ThreeColumnLayout.reviewMin)
+            }
+
+            // Protect chat residual.
+            let maxRails = content * (1 - ThreeColumnLayout.chatMinFraction)
+            if sideW + revW > maxRails, sideW + revW > 0 {
+                let scale = maxRails / (sideW + revW)
+                sideW *= scale
+                revW *= scale
+            }
+
             let mainW = max(1, content - sideW - revW)
 
-            // Divider 0 sits after sidebar.
-            split.setPosition(lastSidebarVisible ? sideW : 0, ofDividerAt: 0)
-            // Divider 1 sits after main (before review).
-            let pos1: CGFloat
-            if lastReviewDocked {
-                pos1 = (lastSidebarVisible ? sideW + split.dividerThickness : 0) + mainW
-            } else {
-                pos1 = total
-            }
-            if split.arrangedSubviews.count > 2 {
-                split.setPosition(pos1, ofDividerAt: 1)
-            }
+            // setPosition: distance from leading edge to the divider.
+            // Divider 0 after sidebar.
+            split.setPosition(sideW, ofDividerAt: 0)
+            // Divider 1 after main → start of review.
+            let pos1 = sideW + split.dividerThickness + mainW
+            split.setPosition(pos1, ofDividerAt: 1)
 
             lastAppliedSideF = sideF
             lastAppliedRevF = revF
-            if force {
-                postChatWidth(final: true)
-            }
+            needsReapplyPositions = false
+
+            // Ensure hosts are visible (never leave isHidden stuck true from older builds).
+            sidebarHost?.isHidden = false
+            mainHost?.isHidden = false
+            panelHost?.isHidden = false
+
+            postChatWidth(final: true)
         }
 
+        // MARK: NSSplitViewDelegate
+
         func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
-            subview === sidebarHost || subview === panelHost
+            // Collapse only by our setPosition(0), not interactive double-click collapse.
+            return false
         }
 
         func splitView(
@@ -317,10 +301,15 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
         ) -> CGFloat {
             let total = max(1, splitView.bounds.width)
             if dividerIndex == 0 {
-                return lastSidebarVisible ? total * 0.08 : 0
+                // Allow full collapse when sidebar hidden; soft floor when visible.
+                return lastSidebarVisible ? total * 0.10 : 0
             }
-            // Main must keep some room; review max ≈ 52%.
-            return lastReviewDocked ? total * (1 - ThreeColumnLayout.reviewMax) : proposedMinimumPosition
+            // Min main width ≈ chatMin when review open.
+            if lastReviewDocked {
+                let side = sidebarHost?.frame.width ?? 0
+                return side + total * ThreeColumnLayout.chatMinFraction * 0.5
+            }
+            return total - 1
         }
 
         func splitView(
@@ -332,22 +321,31 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
             if dividerIndex == 0 {
                 return lastSidebarVisible ? total * ThreeColumnLayout.sidebarMax : 0
             }
-            // Review min soft floor when docked.
-            return lastReviewDocked
-                ? total * (1 - ThreeColumnLayout.reviewMin * 0.45)
-                : proposedMaximumPosition
+            if lastReviewDocked {
+                return total - total * ThreeColumnLayout.reviewMin * 0.5
+            }
+            return total
+        }
+
+        func splitView(
+            _ splitView: NSSplitView,
+            shouldAdjustSizeOfSubview view: NSView
+        ) -> Bool {
+            // Prefer adjusting the chat pane when the host resizes.
+            return view === mainHost
         }
 
         func splitViewWillResizeSubviews(_ notification: Notification) {
-            if !isUserDragging {
+            if !isUserDragging, !suppressFractionWrite {
                 isUserDragging = true
                 postResizeActive(true)
             }
         }
 
         func splitViewDidResizeSubviews(_ notification: Notification) {
-            guard let split = splitView, !suppressFractionWrite else {
-                postChatWidth(final: !isUserDragging)
+            guard let split = splitView else { return }
+            if suppressFractionWrite {
+                postChatWidth(final: true)
                 return
             }
             writeFractionsFromSplit(split)
@@ -368,19 +366,18 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
 
         private func writeFractionsFromSplit(_ split: NSSplitView) {
             let total = max(1, split.bounds.width)
-            let sideW = (sidebarHost?.isHidden == true) ? 0 : (sidebarHost?.frame.width ?? 0)
-            let revW = (panelHost?.isHidden == true) ? 0 : (panelHost?.frame.width ?? 0)
-            let dividers = CGFloat(max(0, split.arrangedSubviews.count - 1)) * split.dividerThickness
-            let content = max(1, total - dividers)
+            let sideW = sidebarHost?.frame.width ?? 0
+            let revW = panelHost?.frame.width ?? 0
+            let content = max(1, total - 2 * split.dividerThickness)
 
-            if lastSidebarVisible, sideW > 1 {
+            if lastSidebarVisible, sideW > 8 {
                 let f = ThreeColumnLayout.clampedSidebar(sideW / content)
                 if abs(f - sidebarFraction.wrappedValue) > 0.001 {
                     sidebarFraction.wrappedValue = f
                     lastAppliedSideF = f
                 }
             }
-            if lastReviewDocked, revW > 1 {
+            if lastReviewDocked, revW > 8 {
                 let f = ThreeColumnLayout.clampedReview(revW / content)
                 if abs(f - reviewFraction.wrappedValue) > 0.001 {
                     reviewFraction.wrappedValue = f
@@ -414,24 +411,30 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
 
 // MARK: - NSSplitView subclass
 
-/// Thin hairline dividers + live-resize end detection.
 final class WorkspaceSplitView: NSSplitView {
     weak var workspaceCoordinator: (any WorkspaceSplitCoordinating)?
-
-    var isSidebarCollapsed = false
-    var isReviewCollapsed = true
 
     override var dividerThickness: CGFloat { 1 }
 
     override func drawDivider(in rect: NSRect) {
-        let color = NSColor(AppTheme.hairlineStroke).withAlphaComponent(0.7)
-        color.setFill()
+        NSColor(AppTheme.hairlineStroke).withAlphaComponent(0.75).setFill()
         rect.fill()
+    }
+
+    override func layout() {
+        super.layout()
+        workspaceCoordinator?.splitViewBoundsDidChange(to: bounds.width)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            workspaceCoordinator?.splitViewBoundsDidChange(to: bounds.width)
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)
-        // Divider tracking is synchronous; when mouseDown returns, drag ended.
         workspaceCoordinator?.userDidEndLiveResize()
     }
 }
