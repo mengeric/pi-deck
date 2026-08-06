@@ -316,7 +316,9 @@ extension PiAgentScreen {
     }
 
     static func estimatedChildHeight(_ child: PiAgentThreadChild, width: CGFloat, toolGroupModel: NativeToolGroupModel? = nil) -> CGFloat {
-        let cardWidth = max(width - 32, 200)
+        // Match live bubble geometry (readable soft-cap + gutter) so estimates
+        // are not wildly short on wide panes (under-estimate → row soup).
+        let cardWidth = max(PiAgentBubbleWidth.replyCap(for: width), 200)
         let charsPerLine = max(Int(cardWidth / 7), 20)
         switch child {
         case let .assistant(entry), let .steering(entry), let .thinking(entry):

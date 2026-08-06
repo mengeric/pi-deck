@@ -153,6 +153,9 @@ extension PiAgentAppKitTranscriptView.Coordinator {
         for row in visible.location ..< visible.location + visible.length where row < orderedIDs.count {
             guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? PiAgentAppKitTranscriptView.TranscriptTableCellView,
                   let native = cell.nativeRow else { continue }
+            // Keep measure() and height reports on the same width as the visual
+            // reflow (installNativeRow is not always re-entered on live resize).
+            cell.configuredWidth = width
             if let bubble = native as? PiAgentNativeBubbleView {
                 bubble.applyRowWidth(width, animated: animated, duration: duration)
             } else if let question = native as? PiAgentNativeQuestionView {

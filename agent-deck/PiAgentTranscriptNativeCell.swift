@@ -520,12 +520,15 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
         cardView.layer?.cornerRadius = AppTheme.Chat.bubbleCornerRadius
         cardView.layer?.cornerCurve = .continuous
         cardView.layer?.borderWidth = 1
+        // Clip card paint to rounded bounds (and row tile when flat/clear).
+        cardView.layer?.masksToBounds = true
         cardView.layer?.actions = [
             "bounds": NSNull(),
             "frame": NSNull(),
             "position": NSNull(),
             "transform": NSNull()
         ]
+        clipsToBounds = true
         addSubview(cardView)
 
         iconView.translatesAutoresizingMaskIntoConstraints = false
@@ -717,6 +720,9 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
         }
         CATransaction.commit()
         needsLayout = true
+        // Width-only reflow can change line count; tell the table to re-tile.
+        // Without this, flat (clear) rows expose overflow as stacked text soup.
+        onIntrinsicHeightChange?()
     }
 
     // MARK: Configure

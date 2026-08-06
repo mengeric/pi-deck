@@ -442,6 +442,16 @@ struct PiAgentAppKitTranscriptView: NSViewRepresentable {
     }
 
     final class TranscriptTableRowView: NSTableRowView {
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            clipsToBounds = true
+        }
+
+        required init?(coder: NSCoder) {
+            super.init(coder: coder)
+            clipsToBounds = true
+        }
+
         override var isEmphasized: Bool {
             get { false }
             set { }
@@ -480,6 +490,10 @@ struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             super.init(frame: frameRect)
             wantsLayer = true
             layer?.backgroundColor = NSColor.clear.cgColor
+            // Flat (transparent) assistant chrome must not paint outside the
+            // table-row tile — previously opaque cards hid overflow from short
+            // row heights; clear fill made multi-row text soup visible.
+            clipsToBounds = true
         }
 
         required init?(coder: NSCoder) { fatalError() }

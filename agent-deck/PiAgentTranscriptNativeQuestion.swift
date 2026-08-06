@@ -1005,6 +1005,7 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
         markdown.prepareForEnclosingWidthChange(innerWidth: laidOut > 1 ? laidOut : max(1, cardW - AppTheme.Chat.bubbleHPadding * 2))
         CATransaction.commit()
         needsLayout = true
+        onIntrinsicHeightChange?()
     }
 
     // MARK: Chip row layout (manual flow wrap)
