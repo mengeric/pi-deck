@@ -223,6 +223,8 @@ final class AppViewModel: NSObject {
     var repositorySelectedDiffText: String?
     /// Trailing inspector open state (Repo Review workbench; expandable later).
     var isTrailingInspectorExpanded = false
+    /// Selected tool in the trailing inspector rail (Review / Memory / …).
+    var trailingInspectorTool: TrailingInspectorTool = TrailingInspectorTool.load()
     /// Full working-tree file text for the selected change (not truncated diff).
     var repositorySelectedFileText: String?
     var repositorySelectedFileLoadError: String?

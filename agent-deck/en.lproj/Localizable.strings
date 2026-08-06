@@ -2420,3 +2420,6 @@
 "session.import.treeUnknown" = "Unknown path";
 "session.import.emptyFilterTitle" = "No sessions here";
 "session.import.emptyFilterBody" = "Nothing matches this directory or search. Pick another folder on the left or clear the search.";
+"inspector.tool.review" = "Review changes";
+"inspector.tool.memory" = "Project memory";
+"inspector.rail.a11y" = "Inspector tools";

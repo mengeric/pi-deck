@@ -482,6 +482,7 @@ extension AppViewModel {
     func openRepoChangesForSelectedPiAgentSession() {
         prepareRepoChangesForSelectedPiAgentSession(force: true)
         withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+            trailingInspectorTool = .review
             isTrailingInspectorExpanded = true
         }
     }

@@ -667,7 +667,7 @@ struct ContentView: View {
                     .perfScene("Detail")
             },
             panel: {
-                PiAgentRepoReviewPanel(viewModel: viewModel)
+                TrailingInspectorHost(viewModel: viewModel)
             }
         )
         // Soft product floor; layout breakpoints handle Review overlay below 1100.

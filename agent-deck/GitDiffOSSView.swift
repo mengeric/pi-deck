@@ -1,51 +1,39 @@
 import SwiftUI
 import gitdiff
 
-/// Phase 0 OSS diff surface for Review: wraps `gitdiff.DiffRenderer`.
+/// Review diff surface backed by open-source `gitdiff.DiffRenderer`.
 ///
 /// - Parameters:
 ///   - diffText: Raw unified / full-file `git diff` text from `GitRepositoryService`.
 ///
-/// Defaults can be overridden with UserDefaults:
-/// - `pi.deck.reviewUseGitdiff` (Bool, default `true`): when `false`, callers should use legacy `FullFileDiffView`.
+/// Visual defaults match Deck chrome: single gutter (compact like the old
+/// in-house view), hunk headers on, file headers off (path bar owns the name).
 struct GitDiffOSSView: View {
     /// Unified diff text produced by git (may include multi-file headers).
     let diffText: String
 
     @Environment(\.colorScheme) private var colorScheme
 
-    /// UserDefaults key: prefer open-source `gitdiff` renderer in Review (default true).
-    static let useGitdiffDefaultsKey = "pi.deck.reviewUseGitdiff"
-
-    /// Whether Review should use the OSS renderer.
-    ///
-    /// - Returns: `true` when key is unset or true; `false` only when explicitly disabled.
-    static var prefersGitdiffRenderer: Bool {
-        if UserDefaults.standard.object(forKey: useGitdiffDefaultsKey) == nil {
-            return true
-        }
-        return UserDefaults.standard.bool(forKey: useGitdiffDefaultsKey)
-    }
-
     var body: some View {
-        // Path bar already shows the file name — hide redundant file headers from the package.
         DiffRenderer(diffText: diffText)
             .diffTheme(resolvedTheme)
             .diffFileHeaders(false)
             .diffHunkHeaders(true)
-            .diffLineNumberStyle(.dual)
+            // Single gutter reads closer to Deck's previous FullFileDiffView.
+            .diffLineNumberStyle(.single)
             .diffFont(size: 12, design: .monospaced)
             .diffWordWrap(false)
+            .diffLineSpacing(.compact)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(AppTheme.textContentFill)
     }
 
-    /// Theme mapped for current color scheme; tinted toward Deck diff colors.
+    /// Theme mapped for current color scheme using Deck add/remove accents.
     private var resolvedTheme: DiffTheme {
         colorScheme == .dark ? Self.deckDarkTheme : Self.deckLightTheme
     }
 
-    /// Light theme using Deck add/remove accents where possible.
+    /// Light theme using Deck add/remove accents.
     private static let deckLightTheme = DiffTheme(
         addedBackground: AppTheme.diffAdded.opacity(0.14),
         addedText: Color.primary,

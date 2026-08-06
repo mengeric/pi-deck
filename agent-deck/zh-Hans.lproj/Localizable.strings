@@ -2419,3 +2419,6 @@
 "session.import.treeUnknown" = "未知路径";
 "session.import.emptyFilterTitle" = "此处无会话";
 "session.import.emptyFilterBody" = "当前目录或搜索无匹配项。请在左侧选择其他文件夹，或清空搜索。";
+"inspector.tool.review" = "审阅变更";
+"inspector.tool.memory" = "项目记忆";
+"inspector.rail.a11y" = "检视工具";
