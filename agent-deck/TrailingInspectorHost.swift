@@ -5,15 +5,15 @@ import SwiftUI
 
 /// Tools available in the trailing inspector (right column).
 ///
-/// Rail is intentionally thin in-house code; Review body uses open-source
-/// `gitdiff` parsing plus Highlightr syntax coloring.
+/// The vertical icon rail is **hidden while the inspector is expanded** (only one
+/// tool remains after Memory was removed; rail would only waste space).
 enum TrailingInspectorTool: String, CaseIterable, Identifiable, Hashable {
     /// Git changes + OSS diff preview.
     case review
 
     var id: String { rawValue }
 
-    /// SF Symbol for the vertical activity rail (git-branded).
+    /// SF Symbol for chrome (path bar / future rail).
     var systemImage: String {
         switch self {
         case .review: return "arrow.triangle.branch"
@@ -32,7 +32,7 @@ enum TrailingInspectorTool: String, CaseIterable, Identifiable, Hashable {
 
     /// Loads last selection; falls back to `.review`.
     ///
-    /// - Returns: Persisted tool or `.review` when missing/unknown (e.g. removed Memory).
+    /// - Returns: Persisted tool or `.review` when missing/unknown.
     static func load() -> TrailingInspectorTool {
         if let raw = UserDefaults.standard.string(forKey: defaultsKey),
            let tool = TrailingInspectorTool(rawValue: raw) {
@@ -49,43 +49,35 @@ enum TrailingInspectorTool: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-/// Host for the trailing column: `[ body | git icon rail ]`.
+/// Host for the trailing column body (no icon rail while expanded).
 ///
 /// - Parameter viewModel: Shared app model (git, session, selected tool).
 struct TrailingInspectorHost: View {
     @Bindable var viewModel: AppViewModel
-    @ObservedObject private var languageStore = LanguageStore.shared
-
-    private let railWidth: CGFloat = 40
 
     var body: some View {
-        HStack(spacing: 0) {
-            toolBody
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            Rectangle()
-                .fill(AppTheme.hairlineStroke.opacity(0.55))
-                .frame(width: 1)
-                .padding(.vertical, 6)
-
-            toolRail
-                .frame(width: railWidth)
-                .padding(.vertical, 8)
-        }
-        .background(AppTheme.windowBackground)
-        .onAppear {
-            // Migrate away from removed tools (e.g. former `.memory`).
-            if TrailingInspectorTool(rawValue: UserDefaults.standard.string(forKey: TrailingInspectorTool.defaultsKey) ?? "") == nil {
-                viewModel.trailingInspectorTool = .review
-                TrailingInspectorTool.save(.review)
-            }
-        }
-        .onChange(of: viewModel.trailingInspectorTool) { _, tool in
-            TrailingInspectorTool.save(tool)
-            if tool == .review {
+        toolBody
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(AppTheme.windowBackground)
+            .onAppear {
+                // Migrate away from removed tools (e.g. former `.memory`).
+                if TrailingInspectorTool(rawValue: UserDefaults.standard.string(forKey: TrailingInspectorTool.defaultsKey) ?? "") == nil {
+                    viewModel.trailingInspectorTool = .review
+                    TrailingInspectorTool.save(.review)
+                }
+                // Expanded Review always shows the review body.
+                if viewModel.trailingInspectorTool != .review {
+                    viewModel.trailingInspectorTool = .review
+                    TrailingInspectorTool.save(.review)
+                }
                 viewModel.prepareRepoChangesForSelectedPiAgentSession(force: false)
             }
-        }
+            .onChange(of: viewModel.trailingInspectorTool) { _, tool in
+                TrailingInspectorTool.save(tool)
+                if tool == .review {
+                    viewModel.prepareRepoChangesForSelectedPiAgentSession(force: false)
+                }
+            }
     }
 
     @ViewBuilder
@@ -94,58 +86,5 @@ struct TrailingInspectorHost: View {
         case .review:
             PiAgentRepoReviewPanel(viewModel: viewModel)
         }
-    }
-
-    private var toolRail: some View {
-        VStack(spacing: 6) {
-            ForEach(TrailingInspectorTool.allCases) { tool in
-                railButton(tool)
-            }
-            Spacer(minLength: 0)
-        }
-        .frame(maxHeight: .infinity, alignment: .top)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(languageStore.t("inspector.rail.a11y"))
-    }
-
-    /// Builds one rail icon button for a tool.
-    ///
-    /// - Parameter tool: Target tool to select when pressed.
-    /// - Returns: Styled circular icon control with git-style branch glyph for Review.
-    private func railButton(_ tool: TrailingInspectorTool) -> some View {
-        let selected = viewModel.trailingInspectorTool == tool
-        return Button {
-            viewModel.trailingInspectorTool = tool
-        } label: {
-            Group {
-                // Prefer asset "branch" when present (same as chrome branch chip).
-                if tool == .review, NSImage(named: "branch") != nil {
-                    Image("branch")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 15, height: 15)
-                } else {
-                    Image(systemName: tool.systemImage)
-                        .font(.system(size: 14, weight: selected ? .semibold : .regular))
-                }
-            }
-            .foregroundStyle(selected ? Color.accentColor : AppTheme.mutedText)
-            .frame(width: 28, height: 28)
-            .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(selected ? Color.accentColor.opacity(0.14) : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(
-                        selected ? Color.accentColor.opacity(0.35) : Color.clear,
-                        lineWidth: 1
-                    )
-            )
-        }
-        .buttonStyle(.plain)
-        .help(languageStore.t(tool.l10nKey))
-        .accessibilityLabel(languageStore.t(tool.l10nKey))
-        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

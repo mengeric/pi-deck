@@ -102,12 +102,14 @@ extension AppViewModel {
         Task { [weak self] in
             guard let self else { return }
             do {
-                // Full-file context so Review can render Codex-style complete file + collapse.
+                // Keep unified context modest: full-file `-U1000000` made large
+                // Swift/JSON diffs multi‑MB and froze the Review paint path.
+                // Hunk-style context (12) is enough for review and stays scrollable.
                 let diff = try await self.gitRepositoryService.loadDiff(
                     for: filePath,
                     kind: kind,
                     in: repoURL,
-                    contextLines: 1_000_000
+                    contextLines: 12
                 )
                 await MainActor.run {
                     guard self.repositoryDiffRequestID == requestID,

@@ -2426,3 +2426,4 @@
 "composer.fly.image" = "图片";
 "composer.fly.images" = "%d 张图片";
 "composer.fly.queued" = "已排队";
+"review.diff.showMore" = "再显示 %d 行（剩余 %d）";

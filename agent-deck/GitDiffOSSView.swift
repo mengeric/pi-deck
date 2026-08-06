@@ -1,13 +1,16 @@
 import AppKit
+import Combine
 import SwiftUI
 import gitdiff
 import Highlightr
 
-/// Review diff surface: **gitdiff** parses unified diff; **Highlightr** colors code.
+/// Review diff surface: **gitdiff** parses unified diff; optional **Highlightr** coloring.
 ///
-/// `gitdiff` has **no** syntax-highlight plugin — its `DiffRenderer` only tints
-/// add/remove/context. We keep the parser (`UnifiedDiffParser`) and render lines
-/// ourselves with Highlightr (highlight.js) per file language.
+/// Performance rules for large files:
+/// - Parse off the main actor.
+/// - Skip syntax highlight above ``highlightLineBudget`` lines (Highlightr is highlight.js).
+/// - Lazy line stacks; no `fixedSize(horizontal:)` measuring the whole file.
+/// - Soft cap on first paint with “Show more” growth.
 ///
 /// - Parameters:
 ///   - diffText: Raw `git diff` text from `GitRepositoryService`.
@@ -21,10 +24,23 @@ struct GitDiffOSSView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var files: [DiffFile] = []
     @State private var isParsing = true
+    @State private var totalLineCount = 0
+    @State private var enableHighlight = false
+    /// How many content lines to mount (grows via “Show more”).
+    @State private var visibleLineBudget = GitDiffOSSView.initialLineBudget
 
     private let gutterWidth: CGFloat = 44
     private let markerWidth: CGFloat = 14
-    private let lineMinHeight: CGFloat = 18
+    private let lineMinHeight: CGFloat = 17
+
+    /// First paint line budget (keeps scroll smooth on multi-kLOC diffs).
+    static let initialLineBudget = 400
+    /// Lines added each time the user expands.
+    static let lineBudgetStep = 600
+    /// Above this, Highlightr is disabled (too expensive per-line).
+    static let highlightLineBudget = 350
+    /// Character length above which highlight is also skipped.
+    static let highlightCharBudget = 80_000
 
     var body: some View {
         Group {
@@ -43,34 +59,77 @@ struct GitDiffOSSView: View {
                         ForEach(files) { file in
                             fileBlock(file)
                         }
+                        if totalLineCount > visibleLineBudget {
+                            moreButton
+                        }
                     }
-                    .fixedSize(horizontal: true, vertical: false)
-                    .frame(minWidth: 520, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                     .padding(.vertical, 6)
                 }
             }
         }
         .background(AppTheme.textContentFill)
         .task(id: diffText) {
-            isParsing = true
-            let parsed = (try? await UnifiedDiffParser().parse(diffText)) ?? []
-            files = parsed
-            isParsing = false
-            DiffSyntaxHighlighter.shared.prepareTheme(colorScheme: colorScheme)
+            await reload(diffText: diffText)
         }
         .onChange(of: colorScheme) { _, scheme in
+            guard enableHighlight else { return }
             DiffSyntaxHighlighter.shared.prepareTheme(colorScheme: scheme)
         }
     }
 
+    private var moreButton: some View {
+        Button {
+            visibleLineBudget += Self.lineBudgetStep
+        } label: {
+            Text(LanguageStore.shared.t(
+                "review.diff.showMore",
+                min(Self.lineBudgetStep, totalLineCount - visibleLineBudget),
+                totalLineCount - visibleLineBudget
+            ))
+            .font(AppTheme.Font.caption.weight(.semibold))
+            .foregroundStyle(Color.accentColor)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+        }
+        .buttonStyle(.plain)
+        .background(AppTheme.contentSubtleFill.opacity(0.6))
+    }
+
+    /// Parses `diffText` off-main and resets budgets for a new selection.
+    ///
+    /// - Parameter diffText: Unified diff payload.
+    private func reload(diffText: String) async {
+        isParsing = true
+        files = []
+        visibleLineBudget = Self.initialLineBudget
+        let text = diffText
+        let charCount = text.utf8.count
+        let parsed: [DiffFile] = await Task.detached(priority: .userInitiated) {
+            (try? await UnifiedDiffParser().parse(text)) ?? []
+        }.value
+        let lines = parsed.reduce(0) { partial, file in
+            partial + file.hunks.reduce(0) { $0 + $1.lines.count }
+        }
+        totalLineCount = lines
+        enableHighlight = lines <= Self.highlightLineBudget && charCount <= Self.highlightCharBudget
+        if enableHighlight {
+            DiffSyntaxHighlighter.shared.prepareTheme(colorScheme: colorScheme)
+        }
+        files = parsed
+        isParsing = false
+    }
+
     @ViewBuilder
     private func fileBlock(_ file: DiffFile) -> some View {
-        let language = DiffSyntaxHighlighter.languageID(
-            forPath: filePath ?? file.displayName
-        )
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(file.hunks) { hunk in
-                Text(hunk.header)
+        let language = enableHighlight
+            ? DiffSyntaxHighlighter.languageID(forPath: filePath ?? file.displayName)
+            : nil
+        let slices = Self.budgetedHunks(file.hunks, budget: visibleLineBudget)
+
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(slices) { slice in
+                Text(slice.header)
                     .font(AppTheme.Font.caption2.weight(.medium).monospaced())
                     .foregroundStyle(AppTheme.mutedText)
                     .padding(.horizontal, 10)
@@ -78,27 +137,52 @@ struct GitDiffOSSView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(AppTheme.contentSubtleFill.opacity(0.85))
 
-                ForEach(hunk.lines) { line in
+                ForEach(slice.lines) { line in
                     lineRow(line, language: language)
                 }
             }
         }
     }
 
-    /// Renders one diff line with gutter, marker, and syntax-colored content.
+    /// Applies a soft line budget across hunks for progressive rendering.
+    ///
+    /// - Parameters:
+    ///   - hunks: Parsed hunks for one file.
+    ///   - budget: Max content lines to include.
+    /// - Returns: Slices with headers and truncated line arrays.
+    private static func budgetedHunks(_ hunks: [DiffHunk], budget: Int) -> [BudgetedHunk] {
+        var left = budget
+        var out: [BudgetedHunk] = []
+        out.reserveCapacity(hunks.count)
+        for hunk in hunks {
+            if left <= 0 { break }
+            let take = min(left, hunk.lines.count)
+            out.append(BudgetedHunk(
+                id: hunk.id,
+                header: hunk.header,
+                lines: Array(hunk.lines.prefix(take))
+            ))
+            left -= take
+        }
+        return out
+    }
+
+    /// One hunk slice after applying the visible-line budget.
+    private struct BudgetedHunk: Identifiable {
+        let id: UUID
+        let header: String
+        let lines: [DiffLine]
+    }
+
+    /// Renders one diff line with gutter, marker, and optional syntax color.
     ///
     /// - Parameters:
     ///   - line: Parsed `gitdiff` line model.
-    ///   - language: highlight.js language id, or `nil` for plain text.
+    ///   - language: highlight.js language id, or `nil` for plain monochrome.
     /// - Returns: A single-row HStack for the diff surface.
     private func lineRow(_ line: DiffLine, language: String?) -> some View {
         let gutter = line.newLineNumber ?? line.oldLineNumber
-        let display = line.content.replacingOccurrences(of: "\t", with: "    ")
-        let highlighted = DiffSyntaxHighlighter.shared.attributedLine(
-            display.isEmpty ? " " : display,
-            language: language,
-            colorScheme: colorScheme
-        )
+        let display = line.content.isEmpty ? " " : line.content.replacingOccurrences(of: "\t", with: "    ")
 
         return HStack(alignment: .firstTextBaseline, spacing: 0) {
             Rectangle()
@@ -122,12 +206,23 @@ struct GitDiffOSSView: View {
                 .foregroundStyle(markerColor(line.type))
                 .frame(width: markerWidth, alignment: .center)
 
-            Text(highlighted)
-                .font(AppTheme.Font.code)
-                .textSelection(.enabled)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .padding(.trailing, 14)
+            Group {
+                if let language, enableHighlight {
+                    Text(DiffSyntaxHighlighter.shared.attributedLine(
+                        display,
+                        language: language,
+                        colorScheme: colorScheme
+                    ))
+                } else {
+                    Text(display)
+                        .foregroundStyle(Color.primary.opacity(0.88))
+                }
+            }
+            .font(AppTheme.Font.code)
+            .textSelection(.enabled)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 14)
         }
         .frame(minHeight: lineMinHeight, alignment: .center)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -177,7 +272,7 @@ struct GitDiffOSSView: View {
 
 // MARK: - Highlightr bridge
 
-/// Thread-safe-ish helper around Highlightr for per-line code coloring in diffs.
+/// Helper around Highlightr for per-line code coloring in small/medium diffs.
 ///
 /// Highlightr wraps highlight.js; call ``prepareTheme(colorScheme:)`` when the
 /// system appearance changes so token colors match light/dark Deck chrome.
@@ -187,23 +282,27 @@ final class DiffSyntaxHighlighter {
 
     private let highlightr: Highlightr?
     private var preparedScheme: ColorScheme?
+    /// Tiny LRU for identical line+language strings within one scroll session.
+    private var lineCache: [String: AttributedString] = [:]
+    private var lineCacheOrder: [String] = []
+    private let lineCacheLimit = 512
 
     private init() {
         highlightr = Highlightr()
-        // Prefer plain code font; SwiftUI Text still applies AppTheme.Font.code.
         highlightr?.theme.codeFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
     }
 
-    /// Switches highlight.js theme for light/dark.
+    /// Switches highlight.js theme for light/dark and clears the line cache.
     ///
     /// - Parameter colorScheme: Current SwiftUI color scheme.
     func prepareTheme(colorScheme: ColorScheme) {
         guard preparedScheme != colorScheme else { return }
         preparedScheme = colorScheme
-        // Built-in themes shipped with Highlightr assets.
         let name = colorScheme == .dark ? "atom-one-dark" : "xcode"
         _ = highlightr?.setTheme(to: name)
         highlightr?.theme.codeFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        lineCache.removeAll(keepingCapacity: true)
+        lineCacheOrder.removeAll(keepingCapacity: true)
     }
 
     /// Maps a file path extension to a highlight.js language id.
@@ -239,7 +338,7 @@ final class DiffSyntaxHighlighter {
         }
     }
 
-    /// Highlights a single source line.
+    /// Highlights a single source line (with a small LRU cache).
     ///
     /// - Parameters:
     ///   - line: Line body without `+`/`-` marker.
@@ -248,16 +347,28 @@ final class DiffSyntaxHighlighter {
     /// - Returns: SwiftUI `AttributedString` for `Text`.
     func attributedLine(_ line: String, language: String?, colorScheme: ColorScheme) -> AttributedString {
         prepareTheme(colorScheme: colorScheme)
-        guard let highlightr,
-              let language,
-              let ns = highlightr.highlight(line, as: language) else {
+        guard let highlightr, let language else {
             var plain = AttributedString(line)
             plain.foregroundColor = Color.primary.opacity(0.88)
             return plain
         }
-        // Drop background from theme so our add/remove row fill shows through.
+        let key = language + "\u{1e}" + line
+        if let hit = lineCache[key] { return hit }
+
+        guard let ns = highlightr.highlight(line, as: language) else {
+            var plain = AttributedString(line)
+            plain.foregroundColor = Color.primary.opacity(0.88)
+            return plain
+        }
         let mutable = NSMutableAttributedString(attributedString: ns)
         mutable.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: mutable.length))
-        return AttributedString(mutable)
+        let value = AttributedString(mutable)
+        lineCache[key] = value
+        lineCacheOrder.append(key)
+        if lineCacheOrder.count > lineCacheLimit {
+            let drop = lineCacheOrder.removeFirst()
+            lineCache[drop] = nil
+        }
+        return value
     }
 }

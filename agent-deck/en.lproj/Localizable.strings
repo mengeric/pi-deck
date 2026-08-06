@@ -2427,3 +2427,4 @@
 "composer.fly.image" = "Image";
 "composer.fly.images" = "%d images";
 "composer.fly.queued" = "Queued";
+"review.diff.showMore" = "Show %d more lines (%d remaining)";
