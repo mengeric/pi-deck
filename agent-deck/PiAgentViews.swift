@@ -110,6 +110,8 @@ struct PiAgentScreen: View {
     @State var sessionsColumnFraction: CGFloat = PiAgentSessionsSplit.defaultFraction
     /// Non-nil while the user is dragging the sessions | transcript splitter.
     @State var sessionsFractionDragOrigin: CGFloat?
+    /// Send → transcript fly animation (used by the in-screen composer path).
+    @StateObject var composerSendFly = ComposerSendFlyController()
 
     /// Default / page size for transcript windowing (latest N threads first).
     let recentTranscriptTimelineItemLimit = 10

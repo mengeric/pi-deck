@@ -16,6 +16,8 @@ struct PiAgentComposerPanel: View {
     let selectedSessionID: UUID?
     let onWillSend: () -> Void
     let onDidSend: () -> Void
+    /// Shared fly controller so the chip can overlay the transcript column.
+    @ObservedObject var sendFly: ComposerSendFlyController
 
     @State private var composerText = ""
     @State private var composerSuggestionIndex = 0
@@ -44,6 +46,7 @@ struct PiAgentComposerPanel: View {
     @State private var composerAttachmentError: String?
     @State private var frozenRuntimeFooterSession: PiAgentSessionRecord?
     @State private var loopDetailsRun: LoopRun?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var piAgentNewSessionProjects: [DiscoveredProject] {
         viewModel.enabledProjects.sorted { lhs, rhs in
@@ -870,6 +873,7 @@ struct PiAgentComposerPanel: View {
                 return
             }
             composerAttachmentError = nil
+            launchSendFly(isQueued: true)
             clearComposerInput()
             store.clearComposerDraft(for: sessionID)
             return
@@ -877,10 +881,26 @@ struct PiAgentComposerPanel: View {
         let accepted = viewModel.sendPiAgentMessage(combined, mode: .prompt, transcriptText: transcriptCombined, titleSource: titleSource, images: composerImages, pasteAttachments: activePasteAttachments, beforeStart: onWillSend)
         guard accepted else { return }
         onDidSend()
+        launchSendFly(isQueued: false)
         clearComposerInput()
         if let sentSessionID {
             store.clearComposerDraft(for: sentSessionID)
         }
+    }
+
+    /// Starts the composer → transcript fly animation for the current input snapshot.
+    ///
+    /// - Parameter isQueued: Whether this send was enqueued while a turn is active.
+    /// - Throws: Never.
+    private func launchSendFly(isQueued: Bool) {
+        guard let payload = ComposerSendFlyPayload.make(
+            text: composerText,
+            images: composerImages,
+            files: composerFiles,
+            folders: composerFolders,
+            isQueued: isQueued
+        ) else { return }
+        sendFly.launch(payload, reduceMotion: reduceMotion)
     }
 
     private func withdrawQueuedComposerMessage(_ item: PiAgentQueuedComposerMessage) {

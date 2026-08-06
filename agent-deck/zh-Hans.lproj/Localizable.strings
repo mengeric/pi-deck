@@ -2422,3 +2422,7 @@
 "inspector.tool.review" = "审阅变更";
 "inspector.tool.memory" = "项目记忆";
 "inspector.rail.a11y" = "检视工具";
+
+"composer.fly.image" = "图片";
+"composer.fly.images" = "%d 张图片";
+"composer.fly.queued" = "已排队";

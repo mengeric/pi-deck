@@ -178,11 +178,21 @@ extension PiAgentScreen {
                     store: store,
                     selectedSessionID: store.selectedSessionID,
                     onWillSend: beginTranscriptAutoScrollTurn,
-                    onDidSend: requestTranscriptBottomScroll
+                    onDidSend: requestTranscriptBottomScroll,
+                    sendFly: composerSendFly
                 )
                 .equatable()
             }
             .padding(18)
+        }
+        // Fly chip overlays the whole column so it can rise into the transcript.
+        .overlay(alignment: .bottomTrailing) {
+            if let payload = composerSendFly.payload {
+                ComposerSendFlyBubble(payload: payload, progress: composerSendFly.progress)
+                    .padding(.trailing, 36)
+                    .padding(.bottom, 120)
+                    .allowsHitTesting(false)
+            }
         }
     }
 

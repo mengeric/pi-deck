@@ -761,6 +761,7 @@ extension PiAgentScreen {
                 return
             }
             composerAttachmentError = nil
+            launchComposerSendFly(isQueued: true)
             clearComposerInput()
             store.clearComposerDraft(for: sessionID)
             return
@@ -768,10 +769,26 @@ extension PiAgentScreen {
         let accepted = viewModel.sendPiAgentMessage(combined, mode: .prompt, transcriptText: transcriptCombined, titleSource: titleSource, images: composerImages, pasteAttachments: activePasteAttachments, beforeStart: beginTranscriptAutoScrollTurn)
         guard accepted else { return }
         requestTranscriptBottomScroll()
+        launchComposerSendFly(isQueued: false)
         clearComposerInput()
         if let sentSessionID {
             store.clearComposerDraft(for: sentSessionID)
         }
+    }
+
+    /// Captures the current composer contents and launches the fly-into-transcript animation.
+    ///
+    /// - Parameter isQueued: Whether this was a follow-up enqueue while a turn is active.
+    /// - Throws: Never.
+    func launchComposerSendFly(isQueued: Bool) {
+        guard let payload = ComposerSendFlyPayload.make(
+            text: composerText,
+            images: composerImages,
+            files: composerFiles,
+            folders: composerFolders,
+            isQueued: isQueued
+        ) else { return }
+        composerSendFly.launch(payload, reduceMotion: false)
     }
 
     /// Moves a queued follow-up back into the composer so the user can edit or drop it.

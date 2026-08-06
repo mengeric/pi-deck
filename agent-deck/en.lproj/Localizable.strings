@@ -2423,3 +2423,7 @@
 "inspector.tool.review" = "Review changes";
 "inspector.tool.memory" = "Project memory";
 "inspector.rail.a11y" = "Inspector tools";
+
+"composer.fly.image" = "Image";
+"composer.fly.images" = "%d images";
+"composer.fly.queued" = "Queued";
