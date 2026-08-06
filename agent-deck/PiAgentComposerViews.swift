@@ -597,7 +597,7 @@ struct PiAgentComposerBox: View {
                     .font(AppTheme.Font.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
                     .frame(width: AppTheme.Control.regularActionTarget, height: AppTheme.Control.regularActionTarget)
-                    .appGlassCircle()
+                    .appComposerMeterCircle()
             }
             .buttonStyle(.plain)
             .help(LanguageStore.shared.t("composer.attachFiles"))
@@ -2010,7 +2010,9 @@ struct PiAgentComposerFooterBar: View {
     let supportedThinkingLevels: [String]
 
     var body: some View {
-        HStack(spacing: 10) {
+        // Quiet meter chips (not heavy glass tint) so the strip sits under the
+        // transcript instead of reading as a solid brand banner.
+        HStack(spacing: 8) {
             PiAgentContextUsageMeter(
                 session: session,
                 showsSmartZoneHint: viewModel.appSettings.showContextSmartZoneHint,
@@ -2022,6 +2024,7 @@ struct PiAgentComposerFooterBar: View {
                 disabledModelIdentifiers: viewModel.appSettings.disabledModelIdentifiers,
                 defaultModel: viewModel.defaultPiAgentModel(),
                 isRunning: viewModel.isPiAgentSessionRunning(session.id),
+                usesQuietMeterChrome: true,
                 onRefresh: { viewModel.refreshPiAgentControlsForSelectedSession() },
                 onCycle: { viewModel.cyclePiAgentModelForSelectedSession() },
                 onSelect: { selection in
@@ -2037,6 +2040,7 @@ struct PiAgentComposerFooterBar: View {
                 supportedLevels: supportedThinkingLevels,
                 defaultLevel: viewModel.defaultPiAgentThinkingLevel(for: supportedThinkingLevels),
                 isRunning: viewModel.isPiAgentSessionRunning(session.id),
+                usesQuietMeterChrome: true,
                 onCycle: { viewModel.cyclePiAgentThinkingLevelForSelectedSession() },
                 onSelect: { viewModel.setPiAgentThinkingLevelForSelectedSession($0) }
             )
@@ -2060,58 +2064,57 @@ struct PiAgentContextUsageMeter: View {
                     .font(AppTheme.Font.caption.weight(.semibold))
                 if let tokens = session.contextTokens {
                     Text("\(compact(tokens)) tokens")
-                        .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
+                        .font(AppTheme.Font.caption.monospacedDigit().weight(.medium))
                         .foregroundStyle(AppTheme.mutedText)
                 }
             }
             .foregroundStyle(.primary)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .appGlassCapsule()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .appComposerMeterChip()
             .fixedSize(horizontal: true, vertical: false)
             .help(LanguageStore.shared.t("composer.compactHelp"))
         } else if let percent = session.contextPercent, let tokens = session.contextTokens, let window = session.contextWindow {
-            GlassEffectContainer(spacing: 6) {
-                HStack(spacing: 6) {
-                    HStack(spacing: 7) {
-                        Text(LanguageStore.shared.t("composer.context"))
-                            .font(AppTheme.Font.caption.weight(.semibold))
-                            .lineLimit(1)
-                            .fixedSize()
-                        PiAgentSmartZoneContextBar(
-                            percent: percent,
-                            showsSmartZoneHint: showsSmartZoneHint,
-                            width: 92,
-                            height: 10
-                        )
-                        Text("\(Int(percent))%")
-                            .font(AppTheme.Font.caption.monospacedDigit().weight(.bold))
-                            .lineLimit(1)
-                        Text("\(compact(tokens))/\(compact(window))")
-                            .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(AppTheme.mutedText)
-                            .lineLimit(1)
-                    }
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .appGlassCapsule()
-                    .fixedSize(horizontal: true, vertical: false)
-                    .help(showsSmartZoneHint ? LanguageStore.shared.t("composer.contextSmartZone") : LanguageStore.shared.t("composer.contextUsage"))
-
-                    Button {
-                        isConfirmingCompaction = true
-                    } label: {
-                        Image(systemName: "arrow.down.right.and.arrow.up.left")
-                            .font(AppTheme.Font.caption.weight(.semibold))
-                            .foregroundStyle(AppTheme.mutedText)
-                            .frame(width: AppTheme.Control.regularActionTarget, height: AppTheme.Control.regularActionTarget)
-                            .appGlassCircle()
-                    }
-                    .buttonStyle(.plain)
-                    .help(LanguageStore.shared.t("composer.compactContext"))
-                    .accessibilityLabel(LanguageStore.shared.t("composer.compactContext"))
+            HStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(LanguageStore.shared.t("composer.context"))
+                        .font(AppTheme.Font.caption.weight(.medium))
+                        .foregroundStyle(AppTheme.mutedText)
+                        .lineLimit(1)
+                        .fixedSize()
+                    PiAgentSmartZoneContextBar(
+                        percent: percent,
+                        showsSmartZoneHint: showsSmartZoneHint,
+                        width: 76,
+                        height: 5
+                    )
+                    Text("\(Int(percent))%")
+                        .font(AppTheme.Font.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(percentForeground(percent))
+                        .lineLimit(1)
+                    Text("\(compact(tokens))/\(compact(window))")
+                        .font(AppTheme.Font.caption2.monospacedDigit().weight(.medium))
+                        .foregroundStyle(AppTheme.mutedText)
+                        .lineLimit(1)
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .appComposerMeterChip()
+                .fixedSize(horizontal: true, vertical: false)
+                .help(showsSmartZoneHint ? LanguageStore.shared.t("composer.contextSmartZone") : LanguageStore.shared.t("composer.contextUsage"))
+
+                Button {
+                    isConfirmingCompaction = true
+                } label: {
+                    Image(systemName: "arrow.down.right.and.arrow.up.left")
+                        .font(AppTheme.Font.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.mutedText)
+                        .frame(width: AppTheme.Control.regularActionTarget, height: AppTheme.Control.regularActionTarget)
+                        .appComposerMeterCircle()
+                }
+                .buttonStyle(.plain)
+                .help(LanguageStore.shared.t("composer.compactContext"))
+                .accessibilityLabel(LanguageStore.shared.t("composer.compactContext"))
             }
             .fixedSize(horizontal: true, vertical: false)
             .layoutPriority(1)
@@ -2122,6 +2125,16 @@ struct PiAgentContextUsageMeter: View {
                 Text(LanguageStore.shared.t("composer.compactConfirmBody"))
             }
         }
+    }
+
+    /// Severity-tinted percent so the number carries meaning without a loud fill.
+    ///
+    /// - Parameter percent: Context usage percent 0…100.
+    /// - Returns: SwiftUI color for the percent label.
+    private func percentForeground(_ percent: Double) -> Color {
+        if percent >= 90 { return .red.opacity(0.95) }
+        if percent >= (showsSmartZoneHint ? 40 : 70) { return .orange.opacity(0.95) }
+        return .primary
     }
 
     private func compact(_ value: Int) -> String {
@@ -2145,29 +2158,26 @@ private struct PiAgentSmartZoneContextBar: View {
         showsSmartZoneHint ? 40 : 70
     }
 
-    private var usageFill: AnyShapeStyle {
-        if clampedPercent >= 90 {
-            return AnyShapeStyle(Color.red.gradient)
-        }
-        if clampedPercent >= warningThreshold {
-            return AnyShapeStyle(Color.orange.gradient)
-        }
-        return AnyShapeStyle(AppTheme.brandAccent.gradient)
+    /// Fill color encodes severity; track stays neutral so the chip itself is not brand-painted.
+    private var usageFill: Color {
+        if clampedPercent >= 90 { return Color.red.opacity(0.9) }
+        if clampedPercent >= warningThreshold { return Color.orange.opacity(0.9) }
+        return AppTheme.brandAccent.opacity(0.85)
     }
 
     var body: some View {
         ZStack(alignment: .leading) {
             Capsule(style: .continuous)
-                .fill(AppTheme.contentFill.opacity(0.75))
+                .fill(Color.primary.opacity(0.12))
 
             Capsule(style: .continuous)
                 .fill(usageFill)
-                .frame(width: width * clampedPercent / 100)
+                .frame(width: max(height, width * clampedPercent / 100))
 
             if showsSmartZoneHint {
                 PiAgentSmartZoneDottedMarker()
-                    .stroke(Color.primary.opacity(0.72), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [1, 3]))
-                    .frame(width: 1.5, height: height)
+                    .stroke(Color.primary.opacity(0.45), style: StrokeStyle(lineWidth: 1, lineCap: .round, dash: [1, 2.5]))
+                    .frame(width: 1, height: height + 2)
                     .position(x: width * 0.4, y: height / 2)
                     .allowsHitTesting(false)
             }
@@ -2185,6 +2195,23 @@ private struct PiAgentSmartZoneDottedMarker: Shape {
         path.move(to: CGPoint(x: rect.midX, y: rect.minY))
         path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
         return path
+    }
+}
+
+/// Switches footer chips between quiet meter chrome and the global glass capsule.
+private struct ComposerMeterChrome: ViewModifier {
+    let quiet: Bool
+
+    /// Applies quiet fill/stroke or Liquid Glass capsule chrome.
+    ///
+    /// - Parameter content: Chip label content.
+    /// - Returns: Chrome-wrapped content.
+    func body(content: Content) -> some View {
+        if quiet {
+            content.appComposerMeterChip()
+        } else {
+            content.appGlassCapsule()
+        }
     }
 }
 
@@ -2830,6 +2857,8 @@ struct PiAgentModelPicker: View {
     let disabledModelIdentifiers: Set<String>
     let defaultModel: AvailableModel?
     let isRunning: Bool
+    /// When true (composer footer), use quiet meter chrome instead of tinted glass.
+    var usesQuietMeterChrome: Bool = false
     let onRefresh: () -> Void
     let onCycle: () -> Void
     let onSelect: (PiAgentModelSelection?) -> Void
@@ -2851,10 +2880,10 @@ struct PiAgentModelPicker: View {
             }
             .font(AppTheme.Font.caption.weight(.semibold))
             .foregroundStyle(.primary)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
             .frame(maxWidth: 220, alignment: .leading)
-            .appGlassCapsule()
+            .modifier(ComposerMeterChrome(quiet: usesQuietMeterChrome))
             .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
@@ -2991,6 +3020,8 @@ struct PiAgentThinkingPicker: View {
     let supportedLevels: [String]
     let defaultLevel: String
     let isRunning: Bool
+    /// When true (composer footer), use quiet meter chrome instead of tinted glass.
+    var usesQuietMeterChrome: Bool = false
     let onCycle: () -> Void
     let onSelect: (String) -> Void
 
@@ -3006,6 +3037,7 @@ struct PiAgentThinkingPicker: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "brain.head.profile")
+                    .foregroundStyle(AppTheme.mutedText)
                 Text(LanguageStore.shared.t("composer.thinkingLevel", displayLevel.capitalized))
                     .lineLimit(1)
                     .truncationMode(.head)
@@ -3015,9 +3047,9 @@ struct PiAgentThinkingPicker: View {
             }
             .font(AppTheme.Font.caption.weight(.semibold))
             .foregroundStyle(.primary)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .appGlassCapsule()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .modifier(ComposerMeterChrome(quiet: usesQuietMeterChrome))
             .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)

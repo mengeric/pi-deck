@@ -209,10 +209,13 @@ enum AppTheme {
 
     /// Subtle theme tint for Liquid Glass *chrome* (composer chips, glass circles,
     /// floating panels) so the glass picks up the active theme rather than reading as
-    /// a neutral system material. Kept low-opacity so it tints the glass rather than
-    /// coloring it — the button-role tints (primary accent, destructive red) are
-    /// separate and intentionally stronger.
-    static var glassTint: Color { brandAccent.opacity(0.55) }
+    /// a neutral system material. Kept low-opacity so it *tints* the glass rather than
+    /// painting solid brand fills — 0.55 previously made every capsule read as a loud
+    /// teal block on dark surfaces. Primary/destructive button tints stay separate.
+    static var glassTint: Color { brandAccent.opacity(0.12) }
+
+    /// Slightly stronger glass tint for selected / emphasized chrome only.
+    static var glassTintEmphasized: Color { brandAccent.opacity(0.22) }
 
     // Source-kind tags for library list rows / detail avatars. Each kind has a
     // distinct hue per theme so the avatar tint signals where an item came from.
@@ -387,6 +390,28 @@ extension View {
     /// list rows).
     func appGlassCapsule() -> some View {
         glassEffect(.regular.tint(AppTheme.glassTint), in: Capsule(style: .continuous))
+    }
+
+    /// Quiet composer-footer chip: hairline + soft fill, no heavy Liquid Glass tint.
+    /// Use for context / model / thinking meters that sit on dark transcript chrome
+    /// and should not compete with the message stream.
+    func appComposerMeterChip() -> some View {
+        background {
+            Capsule(style: .continuous)
+                .fill(AppTheme.contentSubtleFill.opacity(0.92))
+            Capsule(style: .continuous)
+                .strokeBorder(AppTheme.contentStroke.opacity(0.85), lineWidth: 1)
+        }
+    }
+
+    /// Quiet circular twin of `appComposerMeterChip` (compact / attach siblings).
+    func appComposerMeterCircle() -> some View {
+        background {
+            Circle()
+                .fill(AppTheme.contentSubtleFill.opacity(0.92))
+            Circle()
+                .strokeBorder(AppTheme.contentStroke.opacity(0.85), lineWidth: 1)
+        }
     }
 
     /// Glass circle for icon-only chrome buttons (compact, attach, etc.).
