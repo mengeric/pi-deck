@@ -432,9 +432,9 @@ struct ContentView: View {
     @State private var isPiAgentSubagentsPopoverPresented = false
     /// Remembered Review column width, persisted to UserDefaults.
     /// Loaded in `mainContent` onAppear; saved whenever the panel is toggled off.
-    @State private var reviewPanelWidth: CGFloat = 480
+    @State private var reviewFraction: CGFloat = ThreeColumnLayout.reviewDefault
     /// Top-level sidebar column width (persisted).
-    @State private var sidebarColumnWidth: CGFloat = 280
+    @State private var sidebarFraction: CGFloat = ThreeColumnLayout.sidebarDefault
     /// Whether the top-level left sidebar is visible (toggle via toolbar).
     @State private var isSidebarVisible: Bool = true
     @State private var agentModelQuickEditor: AgentModelQuickEditorContext?
@@ -618,8 +618,8 @@ struct ContentView: View {
         ThreeColumnWorkspaceHost(
             isSidebarVisible: isSidebarVisible,
             isReviewExpanded: viewModel.isTrailingInspectorExpanded,
-            sidebarWidth: $sidebarColumnWidth,
-            reviewPanelWidth: $reviewPanelWidth,
+            sidebarFraction: $sidebarFraction,
+            reviewFraction: $reviewFraction,
             sidebar: {
                 CodingAgentPanelLayers(
                     viewModel: viewModel,
@@ -648,24 +648,18 @@ struct ContentView: View {
         )
         .frame(minWidth: 1080, minHeight: 640)
         .onAppear {
-            let savedReview = UserDefaults.standard.double(forKey: "piDeck.reviewPanelWidth")
-            if savedReview > 0 {
-                reviewPanelWidth = CGFloat(savedReview)
-            }
-            let savedSidebar = UserDefaults.standard.double(forKey: "piDeck.sidebarWidth")
-            if savedSidebar > 0 {
-                sidebarColumnWidth = CGFloat(savedSidebar)
-            }
+            sidebarFraction = ThreeColumnLayout.loadSidebarFraction()
+            reviewFraction = ThreeColumnLayout.loadReviewFraction()
             isSidebarVisible = UserDefaults.standard.object(forKey: "piDeck.sidebarVisible") as? Bool ?? true
         }
         .onChange(of: viewModel.isTrailingInspectorExpanded) { _, expanded in
-            // Persist settled Review width when the panel closes (drag-end also saves).
             if !expanded {
-                UserDefaults.standard.set(Double(reviewPanelWidth), forKey: "piDeck.reviewPanelWidth")
+                ThreeColumnLayout.saveReviewFraction(reviewFraction)
             }
         }
         .onChange(of: isSidebarVisible) { _, visible in
             UserDefaults.standard.set(visible, forKey: "piDeck.sidebarVisible")
+            ThreeColumnLayout.saveSidebarFraction(sidebarFraction)
         }
         .navigationTitle(toolbarTitle)
         .toolbar { mainToolbarContent }

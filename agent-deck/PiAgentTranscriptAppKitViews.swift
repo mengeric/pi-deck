@@ -67,6 +67,7 @@ struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         // Layer-backed so row-removal reflows (re-run rewind, visibility toggles)
         // can crossfade via a CATransition on this layer.
         scrollView.wantsLayer = true
+        scrollView.clipsToBounds = true
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false

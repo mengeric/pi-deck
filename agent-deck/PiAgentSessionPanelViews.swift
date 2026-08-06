@@ -546,9 +546,11 @@ struct CodingAgentExpandedPanel: View {
                 .equatable()
             }
         }
-        // Full-bleed: the card chrome belongs to the collapsed state only —
-        // expanding sheds the container so the list gets the whole sidebar.
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        // Full-bleed inside the percentage sidebar; opaque + clipped so the
+        // AppKit transcript in the chat column cannot paint through/under.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(AppTheme.windowBackground)
+        .clipped()
         .onAppear {
             if isActive {
                 // Defer the initial rebuild/sync past the expand animation's
