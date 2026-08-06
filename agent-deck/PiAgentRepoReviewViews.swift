@@ -125,28 +125,23 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
         ZStack(alignment: .trailing) {
             HStack(spacing: 0) {
                 // ① Sidebar — assigned width only; content must hug leading.
-                sidebar()
-                    .frame(width: max(0, layout.sidebarWidth), alignment: .leading)
-                    .frame(maxHeight: .infinity)
-                    .background(AppTheme.windowBackground)
-                    .overlay(alignment: .trailing) {
-                        if layout.sidebarWidth > 0.5 {
-                            Rectangle()
-                                .fill(AppTheme.hairlineStroke.opacity(0.7))
-                                .frame(width: 1)
-                                .allowsHitTesting(false)
-                        }
-                    }
-                    // Leading clip: overflowing children must not center-crop.
-                    .clipped()
-                    .contentShape(Rectangle())
-                    .layoutPriority(0)
-                    .opacity(isSidebarVisible && layout.sidebarWidth > 0.5 ? 1 : 0)
-                    .animation(isAnyDragging ? nil : PanelTransition.fade, value: isSidebarVisible)
-                    .transaction { txn in
-                        if isAnyDragging { txn.disablesAnimations = true }
-                    }
-                    .allowsHitTesting(isSidebarVisible && layout.sidebarWidth > 0.5)
+                // While dragging, hide live content (solid fill) so list/AppKit
+                // rows do not reflow into hairline "dash" artifacts.
+                columnChrome(
+                    width: layout.sidebarWidth,
+                    alignment: .leading,
+                    isVisible: isSidebarVisible && layout.sidebarWidth > 0.5,
+                    trailingHairline: true,
+                    hideContentWhileDragging: true
+                ) {
+                    sidebar()
+                }
+                .layoutPriority(0)
+                .animation(isAnyDragging ? nil : PanelTransition.fade, value: isSidebarVisible)
+                .transaction { txn in
+                    if isAnyDragging { txn.disablesAnimations = true }
+                }
+                .allowsHitTesting(isSidebarVisible && layout.sidebarWidth > 0.5 && !isAnyDragging)
 
                 columnHandle(
                     isDragging: isSidebarDragging,
@@ -158,21 +153,25 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
                 .allowsHitTesting(layout.sidebarHandleWidth > 0.5)
 
                 // ② Chat — residual; highest priority for leftover space.
-                main()
-                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                    .frame(width: max(1, layout.chatWidth), alignment: .leading)
-                    .frame(maxHeight: .infinity)
-                    .background(AppTheme.windowBackground)
-                    .clipped()
-                    .layoutPriority(1)
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear.preference(
-                                key: ThreeColumnChatWidthKey.self,
-                                value: geo.size.width
-                            )
-                        }
-                    )
+                columnChrome(
+                    width: max(1, layout.chatWidth),
+                    alignment: .leading,
+                    isVisible: true,
+                    trailingHairline: false,
+                    hideContentWhileDragging: true
+                ) {
+                    main()
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                }
+                .layoutPriority(1)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(
+                            key: ThreeColumnChatWidthKey.self,
+                            value: geo.size.width
+                        )
+                    }
+                )
 
                 // ③ Docked Review (wide mode only)
                 columnHandle(
@@ -186,48 +185,50 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
                 .opacity(layout.reviewHandleWidth > 0.5 ? 1 : 0)
                 .allowsHitTesting(layout.reviewHandleWidth > 0.5)
 
-                panel()
-                    .frame(width: max(0, layout.reviewWidth), alignment: .trailing)
-                    .frame(maxHeight: .infinity)
-                    .background(AppTheme.windowBackground)
-                    .clipped()
-                    .opacity(reviewDocked ? 1 : 0)
-                    .animation(isAnyDragging ? nil : PanelTransition.fade, value: reviewDocked)
-                    .transaction { txn in
-                        if isAnyDragging { txn.disablesAnimations = true }
-                    }
-                    .allowsHitTesting(reviewDocked)
-                    .zIndex(5)
-                    .overlay(alignment: .leading) {
-                        if reviewDocked {
-                            Rectangle()
-                                .fill(AppTheme.hairlineStroke.opacity(0.7))
-                                .frame(width: 1)
-                                .allowsHitTesting(false)
-                        }
-                    }
+                columnChrome(
+                    width: layout.reviewWidth,
+                    alignment: .trailing,
+                    isVisible: reviewDocked,
+                    trailingHairline: false,
+                    leadingHairline: reviewDocked,
+                    hideContentWhileDragging: true
+                ) {
+                    panel()
+                }
+                .animation(isAnyDragging ? nil : PanelTransition.fade, value: reviewDocked)
+                .transaction { txn in
+                    if isAnyDragging { txn.disablesAnimations = true }
+                }
+                .allowsHitTesting(reviewDocked && !isAnyDragging)
+                .zIndex(5)
             }
 
             // Medium breakpoint: Review as trailing overlay (does not shrink chat).
             if reviewOverlay {
-                panel()
-                    .frame(width: layout.overlayReviewWidth, alignment: .trailing)
-                    .frame(maxHeight: .infinity)
-                    .background(AppTheme.windowBackground)
-                    .overlay(alignment: .leading) {
-                        Rectangle()
-                            .fill(AppTheme.hairlineStroke.opacity(0.85))
-                            .frame(width: 1)
-                    }
-                    .shadow(color: .black.opacity(0.28), radius: 18, x: -4, y: 0)
-                    .clipped()
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                    .zIndex(40)
-                    .gesture(
-                        DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                            .onChanged(handleReviewDragChanged)
-                            .onEnded { _ in handleReviewDragEnded() }
+                columnChrome(
+                    width: layout.overlayReviewWidth,
+                    alignment: .trailing,
+                    isVisible: true,
+                    trailingHairline: false,
+                    leadingHairline: true,
+                    hideContentWhileDragging: true
+                ) {
+                    panel()
+                }
+                .shadow(color: .black.opacity(isAnyDragging ? 0 : 0.28), radius: 18, x: -4, y: 0)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+                .zIndex(40)
+                // Drag only on a thin leading sash — not the whole panel body
+                // (that was eating clicks and felt like content "vanished").
+                .overlay(alignment: .leading) {
+                    columnHandle(
+                        isDragging: isReviewDragging,
+                        onDragChanged: handleReviewDragChanged,
+                        onDragEnded: handleReviewDragEnded
                     )
+                    .frame(width: ThreeColumnLayout.handleSlot)
+                    .offset(x: -ThreeColumnLayout.handleSlot / 2)
+                }
             }
         }
         .background(
@@ -305,7 +306,57 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
         )
     }
 
-    // MARK: Handles
+    // MARK: Handles & chrome
+
+    /// Column shell: fixed host width, solid background, optional hairlines.
+    /// When `hideContentWhileDragging` and a sash is active, live children are
+    /// fully covered so Lazy stacks / AppKit transcript do not paint dash-like
+    /// separator noise mid-resize.
+    @ViewBuilder
+    private func columnChrome<Content: View>(
+        width: CGFloat,
+        alignment: Alignment,
+        isVisible: Bool,
+        trailingHairline: Bool,
+        leadingHairline: Bool = false,
+        hideContentWhileDragging: Bool,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ZStack(alignment: alignment) {
+            content()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
+                // Keep the view tree mounted (no teardown) but invisible while dragging.
+                .opacity(hideContentWhileDragging && isAnyDragging ? 0 : 1)
+
+            if hideContentWhileDragging, isAnyDragging {
+                AppTheme.windowBackground
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(width: max(0, width), alignment: alignment)
+        .frame(maxHeight: .infinity)
+        .background(AppTheme.windowBackground)
+        .overlay(alignment: .trailing) {
+            if trailingHairline, width > 0.5 {
+                Rectangle()
+                    .fill(AppTheme.hairlineStroke.opacity(0.7))
+                    .frame(width: 1)
+                    .allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .leading) {
+            if leadingHairline, width > 0.5 {
+                Rectangle()
+                    .fill(AppTheme.hairlineStroke.opacity(0.7))
+                    .frame(width: 1)
+                    .allowsHitTesting(false)
+            }
+        }
+        .clipped()
+        .contentShape(Rectangle())
+        .opacity(isVisible ? 1 : 0)
+    }
 
     private func columnHandle(
         isDragging: Bool,
@@ -315,9 +366,14 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
         ZStack {
             Rectangle()
                 .fill(Color.clear)
+            // Single clean sash — no tick marks. Accent while dragging.
             RoundedRectangle(cornerRadius: 1, style: .continuous)
-                .fill(AppTheme.hairlineStroke.opacity(isDragging ? 0.95 : 0.55))
-                .frame(width: 1)
+                .fill(
+                    isDragging
+                        ? AppTheme.brandAccent.opacity(0.95)
+                        : AppTheme.hairlineStroke.opacity(0.55)
+                )
+                .frame(width: isDragging ? 2 : 1)
         }
         .contentShape(Rectangle())
         .onHover { hovering in
