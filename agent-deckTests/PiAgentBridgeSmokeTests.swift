@@ -4,11 +4,11 @@ import XCTest
 @MainActor
 final class PiAgentBridgeSmokeTests: XCTestCase {
     func testStreamingFlushCadenceUsesFixedSelectedPolicyAndAdaptiveBackgroundPolicy() {
-        XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: true, characterCount: 0), 33_000_000)
-        XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: true, characterCount: 10_000), 33_000_000)
-        XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: false, characterCount: 999), 33_000_000)
-        XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: false, characterCount: 1_000), 45_000_000)
-        XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: false, characterCount: 4_000), 60_000_000)
+        XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: true, characterCount: 0), 66_000_000)
+        XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: true, characterCount: 10_000), 66_000_000)
+        XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: false, characterCount: 999), 66_000_000)
+        XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: false, characterCount: 1_000), 80_000_000)
+        XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: false, characterCount: 4_000), 100_000_000)
     }
 
     func testLaunchResourceRelaunchRestartsIdleRunningSessionImmediately() throws {

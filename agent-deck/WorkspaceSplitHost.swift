@@ -18,6 +18,10 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
     var isReviewExpanded: Bool
     @Binding var sidebarFraction: CGFloat
     @Binding var reviewFraction: CGFloat
+    /// Bumps only when a pane's SwiftUI *root* must be replaced (sidebar item,
+    /// warning badges, panel chrome). Must NOT include transcript/streaming
+    /// revisions — those update via `@ObservedObject` inside the installed roots.
+    var paneRootEpoch: Int = 0
     @ViewBuilder var sidebar: () -> Sidebar
     @ViewBuilder var main: () -> Main
     @ViewBuilder var panel: () -> Panel
@@ -41,6 +45,7 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
             WorkspaceNSSplitRepresentable(
                 isSidebarVisible: isSidebarVisible,
                 isReviewDocked: dockReviewInSplit,
+                paneRootEpoch: paneRootEpoch,
                 sidebarFraction: $sidebarFraction,
                 reviewFraction: $reviewFraction,
                 sidebar: {
@@ -112,6 +117,7 @@ protocol WorkspaceSplitCoordinating: AnyObject {
 private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: View>: NSViewRepresentable {
     var isSidebarVisible: Bool
     var isReviewDocked: Bool
+    var paneRootEpoch: Int
     @Binding var sidebarFraction: CGFloat
     @Binding var reviewFraction: CGFloat
     @ViewBuilder var sidebar: () -> Sidebar
@@ -159,6 +165,7 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
 
         context.coordinator.lastSidebarVisible = isSidebarVisible
         context.coordinator.lastReviewDocked = isReviewDocked
+        context.coordinator.installedPaneRootEpoch = paneRootEpoch
         // Real positions applied on first non-zero layout (see splitViewBoundsDidChange).
         return split
     }
@@ -167,10 +174,17 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
         context.coordinator.sidebarFraction = $sidebarFraction
         context.coordinator.reviewFraction = $reviewFraction
 
-        // Refresh SwiftUI trees without remounting hosting views.
-        context.coordinator.sidebarHost?.rootView = AnyView(sidebar())
-        context.coordinator.mainHost?.rootView = AnyView(main())
-        context.coordinator.panelHost?.rootView = AnyView(panel())
+        // CRITICAL: do not reassign `rootView` on every SwiftUI pass. Parent body
+        // re-evaluates on unrelated `@Published` noise (and used to rebuild all
+        // three hosting trees ~stream cadence). Data updates flow through
+        // ObservedObject inside the installed roots; only replace roots when
+        // `paneRootEpoch` changes (navigation / chrome).
+        if context.coordinator.installedPaneRootEpoch != paneRootEpoch {
+            context.coordinator.sidebarHost?.rootView = AnyView(sidebar())
+            context.coordinator.mainHost?.rootView = AnyView(main())
+            context.coordinator.panelHost?.rootView = AnyView(panel())
+            context.coordinator.installedPaneRootEpoch = paneRootEpoch
+        }
 
         let visChanged =
             context.coordinator.lastSidebarVisible != isSidebarVisible
@@ -203,6 +217,8 @@ private struct WorkspaceNSSplitRepresentable<Sidebar: View, Main: View, Panel: V
         var lastReviewDocked = false
         var isUserDragging = false
         var needsReapplyPositions = true
+        /// Last `paneRootEpoch` applied to the three `NSHostingView`s.
+        var installedPaneRootEpoch: Int = .min
 
         private var suppressFractionWrite = false
         private var lastAppliedSideF: CGFloat = -1

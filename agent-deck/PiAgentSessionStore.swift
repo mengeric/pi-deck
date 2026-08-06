@@ -3586,7 +3586,7 @@ final class PiAgentSessionStore {
         pendingTranscriptRevisionSessionIDs.insert(sessionID)
         guard pendingTranscriptRevisionTask == nil else { return }
         pendingTranscriptRevisionTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: self?.transcriptRevisionCoalesceNanoseconds ?? 33_000_000)
+            try? await Task.sleep(nanoseconds: self?.transcriptRevisionCoalesceNanoseconds ?? 66_000_000)
             guard !Task.isCancelled else { return }
             self?.flushPendingTranscriptRevisions()
         }

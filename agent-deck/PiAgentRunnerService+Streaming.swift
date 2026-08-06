@@ -26,23 +26,30 @@ extension PiAgentRunnerService {
         )
     }
 
-    /// The selected transcript owns the visible streaming cadence. Background sessions
-    /// retain an adaptive policy so they do not spend the same UI budget on unseen work.
+    /// The selected transcript owns the visible streaming cadence. Align with
+    /// `PiAgentSessionStore` revision coalesce (~66ms) so we do not double-pulse
+    /// the UI at 30Hz while the store already budgets ~15Hz for other mutations.
+    /// Background sessions stay coarser so unseen work spends less UI budget.
     static func streamingFlushDelay(isSelected: Bool, characterCount: Int) -> UInt64 {
         if isSelected {
-            return 33_000_000 // ~30 fps
+            return 66_000_000 // ~15 fps — matches store coalesce window
         }
         switch characterCount {
         case 0..<1_000:
-            return 33_000_000 // ~30 fps
+            return 66_000_000 // ~15 fps
         case 1_000..<4_000:
-            return 45_000_000 // ~22 fps
+            return 80_000_000 // ~12 fps
         default:
-            return 60_000_000 // ~17 fps
+            return 100_000_000 // ~10 fps
         }
     }
 
     func flushStreamingEntries(sessionID: UUID) {
+        // Resolve titles once per flush (not per field); LanguageStore dict lookup
+        // is cheap but this path runs on the main actor every cadence tick.
+        let thinkingTitle = LanguageStore.shared.t("run.thinking")
+        let assistantTitle = LanguageStore.shared.t("run.assistant")
+
         if let thinkingEntryID = thinkingEntryIDsBySessionID[sessionID],
            let thinkingText = thinkingTextBySessionID[sessionID],
            !thinkingText.isEmpty {
@@ -52,7 +59,7 @@ extension PiAgentRunnerService {
                     id: thinkingEntryID,
                     sessionID: sessionID,
                     role: .thinking,
-                    title: LanguageStore.shared.t("run.thinking"),
+                    title: thinkingTitle,
                     text: display,
                     rawJSON: nil
                 ), before: assistantEntryIDsBySessionID[sessionID], persist: false, revisionPolicy: .immediateForSelectedSession)
@@ -65,7 +72,7 @@ extension PiAgentRunnerService {
                 id: assistantEntryID,
                 sessionID: sessionID,
                 role: .assistant,
-                title: LanguageStore.shared.t("run.assistant"),
+                title: assistantTitle,
                 text: TextSanitizer.sanitizeAnswer(assistantText),
                 rawJSON: nil
             ), persist: false, revisionPolicy: .immediateForSelectedSession)

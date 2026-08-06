@@ -612,6 +612,25 @@ struct ContentView: View {
         ]
     }
 
+    /// Identity for NSSplitView pane roots. Includes navigation + warning badges +
+    /// sessions-panel chrome. Excludes transcript/streaming so stream pulses do not
+    /// rebuild the three `NSHostingView` trees.
+    private var workspacePaneRootEpoch: Int {
+        var hasher = Hasher()
+        hasher.combine(viewModel.selectedSidebarItem)
+        hasher.combine(viewModel.isCodingAgentPanelExpanded)
+        hasher.combine(viewModel.hasCompletedInitialRefresh)
+        hasher.combine(viewModel.shouldWarnProjectSelection)
+        hasher.combine(viewModel.hasAgentWarnings)
+        hasher.combine(viewModel.hasSkillWarnings)
+        hasher.combine(viewModel.hasPromptWarnings)
+        hasher.combine(viewModel.shouldWarnDoctor)
+        hasher.combine(viewModel.isTrailingInspectorExpanded)
+        hasher.combine(isSidebarVisible)
+        hasher.combine(LanguageStore.shared.language)
+        return hasher.finalize()
+    }
+
     @ViewBuilder
     private var mainContent: some View {
         let warnings = sidebarWarningSnapshot
@@ -623,6 +642,8 @@ struct ContentView: View {
             isReviewExpanded: viewModel.isTrailingInspectorExpanded,
             sidebarFraction: $sidebarFraction,
             reviewFraction: $reviewFraction,
+            // Navigation/chrome only — never transcript streaming revision.
+            paneRootEpoch: workspacePaneRootEpoch,
             sidebar: {
                 CodingAgentPanelLayers(
                     viewModel: viewModel,

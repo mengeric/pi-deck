@@ -619,7 +619,9 @@ final class PiSubagentRunService {
     private func scheduleStreamingFlush(runID: UUID, parentSessionID: UUID) {
         guard streamFlushTasksByRunID[runID] == nil else { return }
         streamFlushTasksByRunID[runID] = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 33_000_000)
+            // Match parent-session streaming cadence (~15 fps) to avoid burning
+            // main-thread budget on nested agent transcripts.
+            try? await Task.sleep(nanoseconds: 66_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 self?.streamFlushTasksByRunID[runID] = nil
