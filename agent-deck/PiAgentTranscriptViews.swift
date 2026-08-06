@@ -73,10 +73,9 @@ struct PiAgentTranscriptThread: Identifiable, Hashable {
     var id: UUID
     var question: PiAgentTranscriptEntry?
     var steeringMessages: [PiAgentTranscriptEntry]
-    // Thinking entries are kept as a list (not merged into one) so they can be rendered
-    // at their actual timestamp position in the timeline. Merging the post-tool thinking
-    // back to the top would push already-rendered tool activities down on every new
-    // thinking_delta — the source of the "thinking block jumps content around" issue.
+    // Raw thinking parts (deduped by text). Render path merges *adjacent* parts into
+    // one child bubble; thinking separated by tools/assistant stays in place so later
+    // thinking_delta never jumps content above already-shown tool groups.
     var thinkingParts: [PiAgentTranscriptEntry]
     var assistantMessages: [PiAgentTranscriptEntry]
     var activities: [PiAgentTranscriptActivity]
@@ -214,15 +213,25 @@ struct PiAgentTranscriptThread: Identifiable, Hashable {
 
         // Walks arrivals in arrival order and produces the chronological children list.
         // Consecutive `.tool` and `.toolError` arrivals fold into a single `.toolGroup`;
-        // any other kind seals the current group and emits its own child.
+        // consecutive `.thinking` arrivals merge into one bubble (joined text) so multi-
+        // segment reasoning from one turn does not spam the timeline with N “思考” cards.
+        // Any other kind seals the current group / thinking run and emits its own child.
         private func chronologicalChildren(
             allowedThinkingIDs: Set<UUID>,
             latestCompactionID: UUID?
         ) -> [PiAgentThreadChild] {
             var children: [PiAgentThreadChild] = []
             var groupEntries: [PiAgentTranscriptEntry] = []
+            var pendingThinking: [PiAgentTranscriptEntry] = []
 
-            func flushGroup() {
+            /// Emits one thinking child from a run of adjacent thinking parts.
+            func flushThinking() {
+                guard !pendingThinking.isEmpty else { return }
+                children.append(.thinking(Self.mergeAdjacentThinking(pendingThinking)))
+                pendingThinking = []
+            }
+
+            func flushToolGroup() {
                 guard !groupEntries.isEmpty else { return }
                 let firstID = groupEntries.first?.id ?? UUID()
                 let groupActivities = PiAgentTranscriptActivity.make(from: groupEntries)
@@ -234,14 +243,23 @@ struct PiAgentTranscriptThread: Identifiable, Hashable {
                 groupEntries = []
             }
 
+            /// Seal tool group + thinking run before a non-tool, non-thinking child.
+            func flushGroup() {
+                flushThinking()
+                flushToolGroup()
+            }
+
             for arrival in arrivals {
                 switch arrival.kind {
                 case .tool, .toolError:
+                    // Tools interrupt a thinking run — show reasoning above the tools.
+                    flushThinking()
                     groupEntries.append(arrival.entry)
                 case .thinking:
                     guard allowedThinkingIDs.contains(arrival.entry.id) else { continue }
-                    flushGroup()
-                    children.append(.thinking(arrival.entry))
+                    // Tools must close before more thinking; consecutive thinking appends.
+                    flushToolGroup()
+                    pendingThinking.append(arrival.entry)
                 case .steering:
                     flushGroup()
                     children.append(.steering(arrival.entry))
@@ -287,6 +305,48 @@ struct PiAgentTranscriptThread: Identifiable, Hashable {
             }
             flushGroup()
             return children
+        }
+
+        /// Collapse a contiguous thinking run into one bubble.
+        ///
+        /// - Parameter entries: Adjacent thinking parts (already text-deduped).
+        /// - Returns: Single entry; keeps the first id so the native cell identity is
+        ///   stable while later segments stream in (only the body grows).
+        private static func mergeAdjacentThinking(_ entries: [PiAgentTranscriptEntry]) -> PiAgentTranscriptEntry {
+            guard let first = entries.first else {
+                return PiAgentTranscriptEntry(
+                    sessionID: UUID(),
+                    role: .thinking,
+                    title: "Thinking",
+                    text: ""
+                )
+            }
+            guard entries.count > 1 else { return first }
+            let body = entries
+                .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+            var images: [PiAgentTranscriptImageReference] = []
+            var seenImageKeys = Set<String>()
+            for entry in entries {
+                for ref in entry.imageReferences {
+                    let key = ref.id.uuidString
+                    if seenImageKeys.insert(key).inserted {
+                        images.append(ref)
+                    }
+                }
+            }
+            return PiAgentTranscriptEntry(
+                id: first.id,
+                sessionID: first.sessionID,
+                role: .thinking,
+                title: first.title,
+                text: body,
+                rawJSON: first.rawJSON,
+                timestamp: entries.last?.timestamp ?? first.timestamp,
+                imageReferences: images,
+                mcpResultBlocks: first.mcpResultBlocks
+            )
         }
 
         private func coalescedStatuses(_ entries: [PiAgentTranscriptEntry]) -> [PiAgentTranscriptEntry] {
