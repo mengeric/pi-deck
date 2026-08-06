@@ -494,6 +494,7 @@ struct PiAgentRepoReviewPanel: View {
                         diffText: text,
                         filePath: viewModel.repositorySelectedDiffFilePath
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .clipShape(Rectangle())
                 } else if let error = viewModel.repositoryLastError {
                     Text(error)
@@ -505,8 +506,9 @@ struct PiAgentRepoReviewPanel: View {
                     loadingBlock(languageStore.t("activity.preparingDiff"))
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func filePathBar(_ path: String) -> some View {

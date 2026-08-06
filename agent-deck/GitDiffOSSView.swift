@@ -47,27 +47,40 @@ struct GitDiffOSSView: View {
             if isParsing && files.isEmpty {
                 ProgressView()
                     .controlSize(.small)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(12)
             } else if files.isEmpty {
                 Text(LanguageStore.shared.t("review.selectFileBody"))
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(12)
             } else {
-                ScrollView([.vertical, .horizontal], showsIndicators: true) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(files) { file in
-                            fileBlock(file)
+                // Pin short diffs to the top-leading corner — default ScrollView
+                // content can sit vertically centered when the viewport is tall.
+                GeometryReader { geo in
+                    ScrollView([.vertical, .horizontal], showsIndicators: true) {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(files) { file in
+                                fileBlock(file)
+                            }
+                            if totalLineCount > visibleLineBudget {
+                                moreButton
+                            }
                         }
-                        if totalLineCount > visibleLineBudget {
-                            moreButton
-                        }
+                        .frame(
+                            minWidth: geo.size.width,
+                            maxWidth: .infinity,
+                            minHeight: geo.size.height,
+                            maxHeight: .infinity,
+                            alignment: .topLeading
+                        )
                     }
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding(.vertical, 6)
+                    .defaultScrollAnchor(.topLeading)
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(AppTheme.textContentFill)
         .task(id: diffText) {
             await reload(diffText: diffText)
@@ -132,7 +145,8 @@ struct GitDiffOSSView: View {
                 Text(slice.header)
                     .font(AppTheme.Font.caption2.weight(.medium).monospaced())
                     .foregroundStyle(AppTheme.mutedText)
-                    .padding(.horizontal, 10)
+                    .padding(.leading, 8)
+                    .padding(.trailing, 10)
                     .padding(.vertical, 5)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(AppTheme.contentSubtleFill.opacity(0.85))
