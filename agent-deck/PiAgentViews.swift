@@ -105,24 +105,49 @@ struct PiAgentScreen: View {
     // middle column mid-drag) until the drag ends and the table re-lays out.
     @State var isColumnResizing = false
 
+    /// Sessions column share of the chat pane width (not fixed points).
+    /// Persisted so drag resize survives relaunch.
+    @State var sessionsColumnFraction: CGFloat = PiAgentSessionsSplit.defaultFraction
+    /// Non-nil while the user is dragging the sessions | transcript splitter.
+    @State var sessionsFractionDragOrigin: CGFloat?
+
     /// Default / page size for transcript windowing (latest N threads first).
     let recentTranscriptTimelineItemLimit = 10
 
     var body: some View {
-        HStack(spacing: 0) {
-            if showsSessionsColumn {
-                HSplitView {
-                    sessionsColumn
-                        .frame(minWidth: 190, idealWidth: 250, maxWidth: 360)
+        // Percentage split: sessions | transcript always sum to 100% of the
+        // chat column. Avoids HSplitView min-width fights when Review is maxed.
+        GeometryReader { geo in
+            let total = max(1, geo.size.width)
+            let height = max(1, geo.size.height)
+            let fraction = showsSessionsColumn
+                ? PiAgentSessionsSplit.clamped(sessionsColumnFraction)
+                : 0
+            let sessionsW = showsSessionsColumn ? (total * fraction).rounded(.towardZero) : 0
+            let handleW: CGFloat = showsSessionsColumn ? PiAgentSessionsSplit.handleWidth : 0
+            let transcriptW = max(0, total - sessionsW - handleW)
 
-                    activeSessionPaneBoundary
+            HStack(spacing: 0) {
+                if showsSessionsColumn, sessionsW > 1 {
+                    sessionsColumn
+                        .frame(width: sessionsW, height: height, alignment: .topLeading)
+                        .clipped()
+
+                    sessionsSplitHandle(totalWidth: total)
+                        .frame(width: handleW, height: height)
+                        .zIndex(20)
                 }
-            } else {
+
                 activeSessionPaneBoundary
+                    .frame(width: transcriptW, height: height, alignment: .topLeading)
+                    .clipped()
             }
+            .frame(width: total, height: height, alignment: .topLeading)
+            .clipped()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
+            sessionsColumnFraction = PiAgentSessionsSplit.loadFraction()
             syncVisibleSessionSelection()
             syncMultiSelectionToSelectedSession()
             syncRuntimeFooterSnapshot()

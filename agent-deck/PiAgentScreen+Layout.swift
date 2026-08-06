@@ -6,15 +6,105 @@ import SwiftUI
 
 extension PiAgentScreen {
     var activeSessionPaneBoundary: some View {
+        // Width is imposed by the parent percentage split — do not demand a
+        // fixed minWidth here (that used to overflow when Review maximized).
         Color.clear
-            .frame(minWidth: 360, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
             .overlay(alignment: .topLeading) {
                 activeSessionColumn
             }
+            .clipped()
     }
 
+    /// Drag handle between sessions rail and transcript (adjusts % fraction).
+    ///
+    /// - Parameter totalWidth: Full chat-column width used to convert dx → Δfraction.
+    @ViewBuilder
+    func sessionsSplitHandle(totalWidth: CGFloat) -> some View {
+        ZStack {
+            Rectangle().fill(Color.clear)
+            RoundedRectangle(cornerRadius: 1, style: .continuous)
+                .fill(AppTheme.hairlineStroke.opacity(sessionsFractionDragOrigin != nil ? 0.95 : 0.55))
+                .frame(width: 1)
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            if hovering || sessionsFractionDragOrigin != nil {
+                NSCursor.resizeLeftRight.set()
+            } else {
+                NSCursor.arrow.set()
+            }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                .onChanged { value in
+                    if sessionsFractionDragOrigin == nil {
+                        sessionsFractionDragOrigin = sessionsColumnFraction
+                    }
+                    let origin = sessionsFractionDragOrigin ?? sessionsColumnFraction
+                    let span = max(1, totalWidth)
+                    let next = origin + (value.translation.width / span)
+                    sessionsColumnFraction = PiAgentSessionsSplit.clamped(next)
+                }
+                .onEnded { _ in
+                    sessionsFractionDragOrigin = nil
+                    NSCursor.arrow.set()
+                    PiAgentSessionsSplit.saveFraction(sessionsColumnFraction)
+                }
+        )
+        .accessibilityLabel("Resize sessions column")
+    }
+}
+
+// MARK: - Sessions | transcript percentage split
+
+/// Percentage-based width policy for the in-chat sessions rail.
+///
+/// All sizes are fractions of the chat column (0…1), not fixed points, so Review
+/// maximize / window resize never leaves a fixed-width rail overflowing.
+enum PiAgentSessionsSplit {
+    /// Defaults key for the user-adjusted sessions fraction.
+    static let defaultsKey = "piDeck.sessionsColumnFraction"
+    /// Default share of chat width for the sessions list (~28%).
+    static let defaultFraction: CGFloat = 0.28
+    /// Narrowest sessions share (still usable labels).
+    static let minFraction: CGFloat = 0.18
+    /// Widest sessions share before transcript becomes cramped.
+    static let maxFraction: CGFloat = 0.38
+    /// Drag handle width in points (fixed chrome, not a % of content).
+    static let handleWidth: CGFloat = 8
+
+    /// Clamps a raw fraction into the allowed band.
+    ///
+    /// - Parameter value: Proposed sessions width fraction of the chat column.
+    /// - Returns: Fraction in `[minFraction, maxFraction]`.
+    /// - Throws: Never.
+    static func clamped(_ value: CGFloat) -> CGFloat {
+        min(maxFraction, max(minFraction, value))
+    }
+
+    /// Loads the persisted fraction, or the default if unset / invalid.
+    ///
+    /// - Returns: Clamped sessions width fraction.
+    /// - Throws: Never.
+    static func loadFraction() -> CGFloat {
+        let raw = UserDefaults.standard.double(forKey: defaultsKey)
+        guard raw > 0.01, raw < 0.99 else { return defaultFraction }
+        return clamped(CGFloat(raw))
+    }
+
+    /// Persists the sessions width fraction.
+    ///
+    /// - Parameter value: Fraction to store (will be clamped).
+    /// - Throws: Never.
+    static func saveFraction(_ value: CGFloat) {
+        UserDefaults.standard.set(Double(clamped(value)), forKey: defaultsKey)
+    }
+}
+
+extension PiAgentScreen {
     var activeSessionColumn: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .bottomTrailing) {
