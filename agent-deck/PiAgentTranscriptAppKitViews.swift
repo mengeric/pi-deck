@@ -195,10 +195,10 @@ struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         // vend — the dominant dropped-frame cost when sweeping a long session
         // (sampled: AutoSizingMarkdownTextView.intrinsicContentSize + fullRebuild
         // dominate the hitch stacks). LRU order is vend order, so the cap is the
-        // span of rows that scroll up-and-down without thrashing; 160 sat just
-        // under a real reading session's working set. Worst case adds memory for
-        // ~224 more retained rows, traded deliberately for hitch-free reversal.
-        let cellCacheLimit = 384
+        // span of rows that scroll up-and-down without thrashing. Cap tightened
+        // (was 384) for Phase A memory: ~128 covers a typical viewport + reverse
+        // scroll without retaining hundreds of full native markdown trees.
+        let cellCacheLimit = 128
 
         let profiler = TranscriptScrollProfiler()
 

@@ -89,6 +89,13 @@ struct GitDiffOSSView: View {
             guard enableHighlight else { return }
             DiffSyntaxHighlighter.shared.prepareTheme(colorScheme: scheme)
         }
+        .onDisappear {
+            // Drop parsed hunks when the preview unmounts (Review collapse / file change).
+            files = []
+            totalLineCount = 0
+            enableHighlight = false
+            isParsing = false
+        }
     }
 
     private var moreButton: some View {
@@ -125,9 +132,13 @@ struct GitDiffOSSView: View {
             partial + file.hunks.reduce(0) { $0 + $1.lines.count }
         }
         totalLineCount = lines
+        // Large diffs: monochrome only — never construct Highlightr/JSC.
         enableHighlight = lines <= Self.highlightLineBudget && charCount <= Self.highlightCharBudget
         if enableHighlight {
             DiffSyntaxHighlighter.shared.prepareTheme(colorScheme: colorScheme)
+        } else {
+            // Free engine if a previous small file had loaded it.
+            DiffSyntaxHighlighter.shared.releaseEngine()
         }
         files = parsed
         isParsing = false
@@ -288,33 +299,65 @@ struct GitDiffOSSView: View {
 
 /// Helper around Highlightr for per-line code coloring in small/medium diffs.
 ///
-/// Highlightr wraps highlight.js; call ``prepareTheme(colorScheme:)`` when the
-/// system appearance changes so token colors match light/dark Deck chrome.
+/// Highlightr wraps highlight.js and spins up **JavaScriptCore** (~100MB+).
+/// The engine is **lazy**: created on first real highlight call, never when
+/// large diffs skip syntax coloring, and releasable via ``releaseEngine()``
+/// when Review collapses so the JSC step can be reclaimed.
+///
+/// Call ``prepareTheme(colorScheme:)`` only when highlighting is enabled.
 final class DiffSyntaxHighlighter {
-    /// Shared instance (Highlightr is relatively expensive to construct).
+    /// Shared façade (cheap); does **not** construct Highlightr until needed.
     static let shared = DiffSyntaxHighlighter()
 
-    private let highlightr: Highlightr?
+    /// Lazily created highlight.js bridge (nil until first small-diff highlight).
+    private var highlightr: Highlightr?
     private var preparedScheme: ColorScheme?
     /// Tiny LRU for identical line+language strings within one scroll session.
     private var lineCache: [String: AttributedString] = [:]
     private var lineCacheOrder: [String] = []
     private let lineCacheLimit = 512
 
-    private init() {
-        highlightr = Highlightr()
-        highlightr?.theme.codeFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    private init() {}
+
+    /// Whether the JavaScriptCore-backed engine is currently loaded.
+    var isEngineLoaded: Bool { highlightr != nil }
+
+    /// Creates Highlightr on first use (loads highlight.js into JSC).
+    ///
+    /// - Returns: Engine instance, or `nil` if construction fails.
+    @discardableResult
+    private func ensureEngine() -> Highlightr? {
+        if let highlightr { return highlightr }
+        guard let engine = Highlightr() else { return nil }
+        engine.theme.codeFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        highlightr = engine
+        return engine
+    }
+
+    /// Drops Highlightr, line cache, and theme state so JSC can be reclaimed.
+    ///
+    /// Safe to call when Review is collapsed or after a large-diff session that
+    /// never needed highlighting. Next small-file highlight re-creates the engine.
+    func releaseEngine() {
+        highlightr = nil
+        preparedScheme = nil
+        lineCache.removeAll(keepingCapacity: false)
+        lineCacheOrder.removeAll(keepingCapacity: false)
     }
 
     /// Switches highlight.js theme for light/dark and clears the line cache.
     ///
+    /// Lazy-loads the engine. Prefer calling only when ``GitDiffOSSView`` has
+    /// decided `enableHighlight == true`.
+    ///
     /// - Parameter colorScheme: Current SwiftUI color scheme.
     func prepareTheme(colorScheme: ColorScheme) {
+        guard let highlightr = ensureEngine() else { return }
         guard preparedScheme != colorScheme else { return }
         preparedScheme = colorScheme
         let name = colorScheme == .dark ? "atom-one-dark" : "xcode"
-        _ = highlightr?.setTheme(to: name)
-        highlightr?.theme.codeFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        _ = highlightr.setTheme(to: name)
+        highlightr.theme.codeFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         lineCache.removeAll(keepingCapacity: true)
         lineCacheOrder.removeAll(keepingCapacity: true)
     }
@@ -360,8 +403,14 @@ final class DiffSyntaxHighlighter {
     ///   - colorScheme: Ensures theme is prepared before highlighting.
     /// - Returns: SwiftUI `AttributedString` for `Text`.
     func attributedLine(_ line: String, language: String?, colorScheme: ColorScheme) -> AttributedString {
+        // No language → plain text; do **not** spin up JSC.
+        guard let language else {
+            var plain = AttributedString(line)
+            plain.foregroundColor = Color.primary.opacity(0.88)
+            return plain
+        }
         prepareTheme(colorScheme: colorScheme)
-        guard let highlightr, let language else {
+        guard let highlightr else {
             var plain = AttributedString(line)
             plain.foregroundColor = Color.primary.opacity(0.88)
             return plain

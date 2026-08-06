@@ -297,6 +297,10 @@ extension PiAgentAppKitTranscriptView.Coordinator {
                 // were too expensive in the previous session get a fresh
                 // evaluation.
                 prewarmBlockedIDs.removeAll()
+                // Phase A: drop previous session's native cell trees immediately
+                // (do not wait for id-set purge) so memory falls on switch.
+                cellCache.removeAll(keepingCapacity: false)
+                cellCacheLRU.removeAll(keepingCapacity: false)
             }
             let previousIDs = Set(orderedIDs)
             let removedIDs = previousIDs.subtracting(nextIDs)

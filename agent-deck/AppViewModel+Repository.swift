@@ -486,6 +486,8 @@ extension AppViewModel {
         // Instant toggle — split pane width is applied by WorkspaceSplitHost without animation.
         trailingInspectorTool = .review
         isTrailingInspectorExpanded = true
+        // Restore preview text after A3 collapse cleared the in-memory payload.
+        reloadSelectedRepositoryDiffIfNeeded()
     }
 
     func toggleTrailingInspector() {
@@ -499,6 +501,27 @@ extension AppViewModel {
     func collapseTrailingInspector() {
         // Instant collapse to avoid fighting NSSplitView setPosition (was spring-jittery).
         isTrailingInspectorExpanded = false
+        // Phase A3: release parsed diff presentation + Highlightr/JSC; keep path/kind
+        // so reopen can reload from repositoryDiffCache without re-picking the file.
+        releaseReviewDiffPresentation()
+    }
+
+    /// Clears in-memory unified-diff string and syntax engine after Review body hides.
+    ///
+    /// Path/kind selection is retained. Does not throw.
+    func releaseReviewDiffPresentation() {
+        repositorySelectedDiffText = nil
+        DiffSyntaxHighlighter.shared.releaseEngine()
+    }
+
+    /// Reloads the selected file's diff text when path/kind are set but text was released.
+    ///
+    /// - Note: Used after expanding Review so the preview is not stuck on “preparing”.
+    func reloadSelectedRepositoryDiffIfNeeded() {
+        guard let path = repositorySelectedDiffFilePath,
+              let kind = repositorySelectedDiffKind,
+              repositorySelectedDiffText == nil else { return }
+        loadDiff(for: path, kind: kind)
     }
 
     /// Absolute file URL under the active review repository root.
