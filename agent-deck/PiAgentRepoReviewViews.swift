@@ -75,14 +75,20 @@ struct PiAgentRepoReviewToolbarButton: View {
     @ObservedObject private var languageStore = LanguageStore.shared
 
     var body: some View {
+        // Expanded → hide; collapsed → expand (same as rail tool toggle).
         Button {
             viewModel.toggleTrailingInspector()
         } label: {
             Label(languageStore.t("review.toolbar"), systemImage: "sidebar.trailing")
         }
         .accessibilityLabel(languageStore.t("review.toolbar"))
-        .help(languageStore.t("review.toolbarHelp"))
+        .help(
+            viewModel.isTrailingInspectorExpanded
+                ? languageStore.t("inspector.rail.hide")
+                : languageStore.t("review.toolbarHelp")
+        )
         .disabled(viewModel.piAgentSessionStore.selectedSession == nil)
+        .symbolVariant(viewModel.isTrailingInspectorExpanded ? .fill : .none)
     }
 }
 

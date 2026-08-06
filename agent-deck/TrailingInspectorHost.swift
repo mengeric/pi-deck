@@ -5,8 +5,10 @@ import SwiftUI
 
 /// Tools available in the trailing inspector (right column).
 ///
-/// Body uses open-source `gitdiff` parsing plus Highlightr; the thin vertical
-/// rail stays visible while Review is open for tool identity / future tools.
+/// Rail interaction:
+/// - **Not expanded** → toolbar / open path expands Review (`toggleTrailingInspector`).
+/// - **Expanded + click active tool** → collapses the whole trailing column.
+/// - **Expanded + click other tool** → switches body (future multi-tool).
 enum TrailingInspectorTool: String, CaseIterable, Identifiable, Hashable {
     /// Git changes + OSS diff preview.
     case review
@@ -49,7 +51,7 @@ enum TrailingInspectorTool: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-/// Host for the trailing column: `[ body | git icon rail ]`.
+/// Host for the trailing column: `[ body | icon rail ]`.
 ///
 /// - Parameter viewModel: Shared app model (git, session, selected tool).
 struct TrailingInspectorHost: View {
@@ -107,20 +109,45 @@ struct TrailingInspectorHost: View {
                 railButton(tool)
             }
             Spacer(minLength: 0)
+            // Explicit hide control — same glyph as toolbar “Review”.
+            collapseRailButton
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(languageStore.t("inspector.rail.a11y"))
     }
 
+    /// Hides the trailing inspector column (Review closed).
+    private var collapseRailButton: some View {
+        Button {
+            viewModel.collapseTrailingInspector()
+        } label: {
+            Image(systemName: "sidebar.trailing")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(AppTheme.mutedText)
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(languageStore.t("inspector.rail.hide"))
+        .accessibilityLabel(languageStore.t("inspector.rail.hide"))
+    }
+
     /// Builds one rail icon button for a tool.
     ///
-    /// - Parameter tool: Target tool to select when pressed.
-    /// - Returns: Styled circular icon control with git-style branch glyph for Review.
+    /// Clicking the **already-selected** tool while expanded **collapses** the
+    /// trailing column (toggle). Clicking another tool switches the body.
+    ///
+    /// - Parameter tool: Target tool.
+    /// - Returns: Styled circular icon control.
     private func railButton(_ tool: TrailingInspectorTool) -> some View {
         let selected = viewModel.trailingInspectorTool == tool
+            && viewModel.isTrailingInspectorExpanded
         return Button {
-            viewModel.trailingInspectorTool = tool
+            selectOrToggle(tool)
         } label: {
             Group {
                 if tool == .review, NSImage(named: "branch") != nil {
@@ -151,5 +178,28 @@ struct TrailingInspectorHost: View {
         .help(languageStore.t(tool.l10nKey))
         .accessibilityLabel(languageStore.t(tool.l10nKey))
         .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityHint(languageStore.t("inspector.rail.toggleHint"))
+    }
+
+    /// Selects a tool, or collapses when the active expanded tool is clicked again.
+    ///
+    /// - Parameter tool: Rail tool that was activated.
+    private func selectOrToggle(_ tool: TrailingInspectorTool) {
+        if viewModel.isTrailingInspectorExpanded,
+           viewModel.trailingInspectorTool == tool {
+            // Shown → hide.
+            viewModel.collapseTrailingInspector()
+            return
+        }
+        // Not expanded, or switching tools → expand + select.
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+            viewModel.trailingInspectorTool = tool
+            TrailingInspectorTool.save(tool)
+            if !viewModel.isTrailingInspectorExpanded {
+                viewModel.openRepoChangesForSelectedPiAgentSession()
+            } else if tool == .review {
+                viewModel.prepareRepoChangesForSelectedPiAgentSession(force: false)
+            }
+        }
     }
 }

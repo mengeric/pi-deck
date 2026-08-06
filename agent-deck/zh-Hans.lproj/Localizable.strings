@@ -2427,3 +2427,5 @@
 "composer.fly.images" = "%d 张图片";
 "composer.fly.queued" = "已排队";
 "review.diff.showMore" = "再显示 %d 行（剩余 %d）";
+"inspector.rail.hide" = "隐藏审阅栏";
+"inspector.rail.toggleHint" = "再点一次可隐藏面板";
