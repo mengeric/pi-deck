@@ -489,9 +489,12 @@ struct PiAgentRepoReviewPanel: View {
                         layout: .fill
                     )
                 } else if let text = viewModel.repositorySelectedDiffText {
-                    // Phase 0: hard-wire OSS gitdiff (no legacy branch) so we can verify the package path.
-                    GitDiffOSSView(diffText: text)
-                        .clipShape(Rectangle())
+                    // gitdiff parser + Highlightr syntax (package has no highlight plugin).
+                    GitDiffOSSView(
+                        diffText: text,
+                        filePath: viewModel.repositorySelectedDiffFilePath
+                    )
+                    .clipShape(Rectangle())
                 } else if let error = viewModel.repositoryLastError {
                     Text(error)
                         .font(AppTheme.Font.caption)
@@ -509,9 +512,19 @@ struct PiAgentRepoReviewPanel: View {
     private func filePathBar(_ path: String) -> some View {
         let fileName = (path as NSString).lastPathComponent
         return HStack(spacing: 8) {
-            Image(systemName: "doc.text")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(AppTheme.mutedText)
+            // Git-branded glyph next to path (Review / gitdiff surface).
+            Group {
+                if NSImage(named: "branch") != nil {
+                    Image("branch")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 12, height: 12)
+                } else {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+            }
+            .foregroundStyle(AppTheme.mutedText)
 
             Text(fileName)
                 .font(AppTheme.Font.caption.weight(.semibold))

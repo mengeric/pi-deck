@@ -46,3 +46,9 @@ defaults write works.earendil.pi-deck pi.deck.reviewUseGitdiff -bool true
 - Confirmed in UI (2026-08-06): pink identity chips showed `gitdiff OSS` / dual gutter / package headers.
 - Debug chrome removed after verification; Review preview hard-wired to `GitDiffOSSView` (`DiffRenderer`).
 - Legacy `FullFileDiffView` remains in source for emergency reference only (not linked from preview).
+
+
+## Syntax highlighting
+
+- **gitdiff has no highlight plugin** — `DiffRenderer` only paints add/remove/context colors.
+- Deck uses `UnifiedDiffParser` from gitdiff + **Highlightr** (highlight.js) for per-line syntax color.
