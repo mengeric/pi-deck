@@ -71,19 +71,21 @@ private struct ThreeColumnChatWidthKey: PreferenceKey {
     }
 }
 
-/// True top-level three columns:
-/// `[ Sidebar | Chat | Review ]` with independent drag handles.
+/// Top-level workspace host with a **single-source** width model.
 ///
-/// **Widths are percentages of the host** (not fixed pt floors). Handles are the
-/// only fixed chrome. Chat always receives the residual after sidebar + review
-/// fractions, and never drops below `chatMinFraction` of the host — sidebar and
-/// review shrink together if the user drags either panel too wide.
+/// Contract:
+/// - Only this host assigns absolute column widths.
+/// - Children must compress (truncate / internal scroll); they never set a
+///   horizontal min that can exceed the assigned frame.
+/// - Persist fractions only; resolve is pure (`WorkspaceLayout` / `ThreeColumnLayout`).
+/// - Narrow hosts **degrade**: Review becomes a trailing overlay instead of
+///   stealing HStack budget (no more steal-from-neighbor min floors).
 struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
     var isSidebarVisible: Bool = true
     var isReviewExpanded: Bool
-    /// Sidebar share of host width when visible (0…1).
+    /// Sidebar share of available content width when docked (0…1).
     @Binding var sidebarFraction: CGFloat
-    /// Review share of host width when expanded (0…1).
+    /// Review share of available content width when docked in three-column mode.
     @Binding var reviewFraction: CGFloat
     @ViewBuilder var sidebar: () -> Sidebar
     @ViewBuilder var main: () -> Main
@@ -101,95 +103,132 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
         isSidebarDragging || isReviewDragging
     }
 
-    var body: some View {
-        let layout = ThreeColumnLayout.resolved(
-            host: hostWidth > 1 ? hostWidth : 1400,
+    private var currentHost: CGFloat {
+        hostWidth > 1 ? hostWidth : 1400
+    }
+
+    private var layout: ThreeColumnLayout.Resolved {
+        ThreeColumnLayout.resolved(
+            host: currentHost,
             sidebarVisible: isSidebarVisible,
             reviewExpanded: isReviewExpanded,
             sidebarFraction: sidebarFraction,
             reviewFraction: reviewFraction
         )
+    }
 
-        HStack(spacing: 0) {
-            // ① Sidebar — width is a pure % of host
-            sidebar()
-                .frame(width: layout.sidebarWidth, alignment: .leading)
-                .frame(maxHeight: .infinity)
-                .background(AppTheme.windowBackground)
-                .overlay(alignment: .trailing) {
-                    Rectangle()
-                        .fill(AppTheme.hairlineStroke.opacity(0.7))
-                        .frame(width: 1)
-                        .allowsHitTesting(false)
-                }
-                .clipped()
-                .compositingGroup()
-                .layoutPriority(0)
-                .opacity(isSidebarVisible ? 1 : 0)
-                .animation(isAnyDragging ? nil : PanelTransition.fade, value: isSidebarVisible)
-                .transaction { txn in
-                    if isAnyDragging { txn.disablesAnimations = true }
-                }
-                .allowsHitTesting(isSidebarVisible)
+    var body: some View {
+        let layout = self.layout
+        let reviewDocked = layout.mode == .threeColumn && isReviewExpanded
+        let reviewOverlay = layout.mode == .reviewOverlay && isReviewExpanded
 
-            columnHandle(
-                isDragging: isSidebarDragging,
-                onDragChanged: handleSidebarDragChanged,
-                onDragEnded: handleSidebarDragEnded
-            )
-            .frame(width: isSidebarVisible ? ThreeColumnLayout.handleSlot : 0)
-            .opacity(isSidebarVisible ? 1 : 0)
-            .allowsHitTesting(isSidebarVisible)
-
-            // ② Chat — residual % after sidebar + review + handles
-            main()
-                .frame(width: layout.chatWidth, alignment: .leading)
-                .frame(maxHeight: .infinity)
-                .background(AppTheme.windowBackground)
-                .clipped()
-                .compositingGroup()
-                .layoutPriority(1)
-                .background(
-                    GeometryReader { geo in
-                        Color.clear.preference(
-                            key: ThreeColumnChatWidthKey.self,
-                            value: geo.size.width
-                        )
+        ZStack(alignment: .trailing) {
+            HStack(spacing: 0) {
+                // ① Sidebar — assigned width only; content must hug leading.
+                sidebar()
+                    .frame(width: max(0, layout.sidebarWidth), alignment: .leading)
+                    .frame(maxHeight: .infinity)
+                    .background(AppTheme.windowBackground)
+                    .overlay(alignment: .trailing) {
+                        if layout.sidebarWidth > 0.5 {
+                            Rectangle()
+                                .fill(AppTheme.hairlineStroke.opacity(0.7))
+                                .frame(width: 1)
+                                .allowsHitTesting(false)
+                        }
                     }
+                    // Leading clip: overflowing children must not center-crop.
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .layoutPriority(0)
+                    .opacity(isSidebarVisible && layout.sidebarWidth > 0.5 ? 1 : 0)
+                    .animation(isAnyDragging ? nil : PanelTransition.fade, value: isSidebarVisible)
+                    .transaction { txn in
+                        if isAnyDragging { txn.disablesAnimations = true }
+                    }
+                    .allowsHitTesting(isSidebarVisible && layout.sidebarWidth > 0.5)
+
+                columnHandle(
+                    isDragging: isSidebarDragging,
+                    onDragChanged: handleSidebarDragChanged,
+                    onDragEnded: handleSidebarDragEnded
                 )
+                .frame(width: layout.sidebarHandleWidth)
+                .opacity(layout.sidebarHandleWidth > 0.5 ? 1 : 0)
+                .allowsHitTesting(layout.sidebarHandleWidth > 0.5)
 
-            // ③ Review handle + panel
-            columnHandle(
-                isDragging: isReviewDragging,
-                onDragChanged: handleReviewDragChanged,
-                onDragEnded: handleReviewDragEnded
-            )
-            .frame(width: isReviewExpanded ? ThreeColumnLayout.handleSlot : 0)
-            .contentShape(Rectangle())
-            .zIndex(30)
-            .allowsHitTesting(isReviewExpanded)
+                // ② Chat — residual; highest priority for leftover space.
+                main()
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                    .frame(width: max(1, layout.chatWidth), alignment: .leading)
+                    .frame(maxHeight: .infinity)
+                    .background(AppTheme.windowBackground)
+                    .clipped()
+                    .layoutPriority(1)
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: ThreeColumnChatWidthKey.self,
+                                value: geo.size.width
+                            )
+                        }
+                    )
 
-            panel()
-                .frame(width: layout.reviewWidth, alignment: .trailing)
-                .frame(maxHeight: .infinity)
-                .background(AppTheme.windowBackground)
-                .clipped()
-                .compositingGroup()
-                .opacity(isReviewExpanded ? 1 : 0)
-                .animation(isAnyDragging ? nil : PanelTransition.fade, value: isReviewExpanded)
-                .transaction { txn in
-                    if isAnyDragging { txn.disablesAnimations = true }
-                }
-                .allowsHitTesting(isReviewExpanded)
-                .zIndex(5)
-                .overlay(alignment: .leading) {
-                    if isReviewExpanded {
-                        Rectangle()
-                            .fill(AppTheme.hairlineStroke.opacity(0.7))
-                            .frame(width: 1)
-                            .allowsHitTesting(false)
+                // ③ Docked Review (wide mode only)
+                columnHandle(
+                    isDragging: isReviewDragging,
+                    onDragChanged: handleReviewDragChanged,
+                    onDragEnded: handleReviewDragEnded
+                )
+                .frame(width: layout.reviewHandleWidth)
+                .contentShape(Rectangle())
+                .zIndex(30)
+                .opacity(layout.reviewHandleWidth > 0.5 ? 1 : 0)
+                .allowsHitTesting(layout.reviewHandleWidth > 0.5)
+
+                panel()
+                    .frame(width: max(0, layout.reviewWidth), alignment: .trailing)
+                    .frame(maxHeight: .infinity)
+                    .background(AppTheme.windowBackground)
+                    .clipped()
+                    .opacity(reviewDocked ? 1 : 0)
+                    .animation(isAnyDragging ? nil : PanelTransition.fade, value: reviewDocked)
+                    .transaction { txn in
+                        if isAnyDragging { txn.disablesAnimations = true }
                     }
-                }
+                    .allowsHitTesting(reviewDocked)
+                    .zIndex(5)
+                    .overlay(alignment: .leading) {
+                        if reviewDocked {
+                            Rectangle()
+                                .fill(AppTheme.hairlineStroke.opacity(0.7))
+                                .frame(width: 1)
+                                .allowsHitTesting(false)
+                        }
+                    }
+            }
+
+            // Medium breakpoint: Review as trailing overlay (does not shrink chat).
+            if reviewOverlay {
+                panel()
+                    .frame(width: layout.overlayReviewWidth, alignment: .trailing)
+                    .frame(maxHeight: .infinity)
+                    .background(AppTheme.windowBackground)
+                    .overlay(alignment: .leading) {
+                        Rectangle()
+                            .fill(AppTheme.hairlineStroke.opacity(0.85))
+                            .frame(width: 1)
+                    }
+                    .shadow(color: .black.opacity(0.28), radius: 18, x: -4, y: 0)
+                    .clipped()
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .zIndex(40)
+                    .gesture(
+                        DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                            .onChanged(handleReviewDragChanged)
+                            .onEnded { _ in handleReviewDragEnded() }
+                    )
+            }
         }
         .background(
             GeometryReader { geo in
@@ -219,14 +258,12 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
     // MARK: Fraction policy
 
     private func clampFractionsToPolicy() {
-        let nextSide = ThreeColumnLayout.clampedSidebar(sidebarFraction)
-        let nextReview = ThreeColumnLayout.clampedReview(reviewFraction)
-        // Ensure chat residual ≥ chatMinFraction when both rails open.
         let fitted = ThreeColumnLayout.fit(
+            host: currentHost,
             sidebarVisible: isSidebarVisible,
             reviewExpanded: isReviewExpanded,
-            sidebarFraction: nextSide,
-            reviewFraction: nextReview
+            sidebarFraction: sidebarFraction,
+            reviewFraction: reviewFraction
         )
         var txn = Transaction()
         txn.disablesAnimations = true
@@ -243,13 +280,7 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
     // MARK: Transcript notifications
 
     private func postTranscriptLiveResize(final: Bool) {
-        let layout = ThreeColumnLayout.resolved(
-            host: hostWidth > 1 ? hostWidth : 1400,
-            sidebarVisible: isSidebarVisible,
-            reviewExpanded: isReviewExpanded,
-            sidebarFraction: sidebarFraction,
-            reviewFraction: reviewFraction
-        )
+        let layout = self.layout
         let target: CGFloat
         if chatColumnWidth > 40, abs(chatColumnWidth - layout.chatWidth) < 48 {
             target = chatColumnWidth
@@ -309,11 +340,12 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
             sidebarDragOrigin = sidebarFraction
             postColumnResizeActive(true)
         }
-        let host = max(1, hostWidth > 1 ? hostWidth : 1400)
+        let host = max(1, currentHost)
         let origin = sidebarDragOrigin ?? sidebarFraction
-        // Drag right → larger sidebar fraction.
+        // Drag right → larger sidebar fraction of content budget.
         let next = origin + (value.translation.width / host)
         let fitted = ThreeColumnLayout.fit(
+            host: host,
             sidebarVisible: true,
             reviewExpanded: isReviewExpanded,
             sidebarFraction: next,
@@ -323,8 +355,9 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
         txn.disablesAnimations = true
         withTransaction(txn) {
             sidebarFraction = fitted.sidebar
-            // May also shrink review so chat keeps its min fraction.
-            if isReviewExpanded { reviewFraction = fitted.review }
+            if isReviewExpanded, layout.mode == .threeColumn {
+                reviewFraction = fitted.review
+            }
         }
         postTranscriptLiveResize(final: false)
     }
@@ -344,11 +377,12 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
             reviewDragOrigin = reviewFraction
             postColumnResizeActive(true)
         }
-        let host = max(1, hostWidth > 1 ? hostWidth : 1400)
+        let host = max(1, currentHost)
         let origin = reviewDragOrigin ?? reviewFraction
         // Drag left → larger review fraction.
         let next = origin - (value.translation.width / host)
         let fitted = ThreeColumnLayout.fit(
+            host: host,
             sidebarVisible: isSidebarVisible,
             reviewExpanded: true,
             sidebarFraction: sidebarFraction,
@@ -358,7 +392,9 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
         txn.disablesAnimations = true
         withTransaction(txn) {
             reviewFraction = fitted.review
-            if isSidebarVisible { sidebarFraction = fitted.sidebar }
+            if isSidebarVisible, layout.mode == .threeColumn {
+                sidebarFraction = fitted.sidebar
+            }
         }
         postTranscriptLiveResize(final: false)
     }
@@ -374,152 +410,7 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
     }
 }
 
-// MARK: - Percentage column policy
-
-/// Pure-percentage width policy for the top-level three-column workspace.
-///
-/// All panel sizes are fractions of the host width. The only fixed sizes are
-/// splitter handle slots. Chat is always `1 − sidebar − review − handles/host`.
-enum ThreeColumnLayout {
-    /// Defaults keys (fractions 0…1).
-    static let sidebarFractionKey = "piDeck.sidebarFraction"
-    static let reviewFractionKey = "piDeck.reviewFraction"
-    /// Legacy pt keys — migrated once into fractions when host is known.
-    static let legacySidebarWidthKey = "piDeck.sidebarWidth"
-    static let legacyReviewWidthKey = "piDeck.reviewPanelWidth"
-
-    static let sidebarDefault: CGFloat = 0.20
-    static let sidebarMin: CGFloat = 0.12
-    static let sidebarMax: CGFloat = 0.28
-
-    static let reviewDefault: CGFloat = 0.36
-    static let reviewMin: CGFloat = 0.18
-    static let reviewMax: CGFloat = 0.52
-
-    /// Minimum residual chat share of the host when other rails are open.
-    static let chatMinFraction: CGFloat = 0.30
-
-    static let handleWidth: CGFloat = 10
-    static let handlePad: CGFloat = 6
-    static var handleSlot: CGFloat { handleWidth + handlePad * 2 }
-
-    struct Resolved: Equatable {
-        var sidebarWidth: CGFloat
-        var chatWidth: CGFloat
-        var reviewWidth: CGFloat
-    }
-
-    struct FittedFractions: Equatable {
-        var sidebar: CGFloat
-        var review: CGFloat
-    }
-
-    static func clampedSidebar(_ f: CGFloat) -> CGFloat {
-        min(sidebarMax, max(sidebarMin, f))
-    }
-
-    static func clampedReview(_ f: CGFloat) -> CGFloat {
-        min(reviewMax, max(reviewMin, f))
-    }
-
-    /// Scale sidebar/review fractions so chat residual ≥ `chatMinFraction`.
-    static func fit(
-        sidebarVisible: Bool,
-        reviewExpanded: Bool,
-        sidebarFraction: CGFloat,
-        reviewFraction: CGFloat
-    ) -> FittedFractions {
-        var side = sidebarVisible ? clampedSidebar(sidebarFraction) : 0
-        var rev = reviewExpanded ? clampedReview(reviewFraction) : 0
-        // Handles consume a tiny host share; approximate with 0 when host unknown —
-        // exact handle deduction is applied in `resolved(host:)`.
-        let used = side + rev
-        let maxPanels = max(0, 1 - chatMinFraction)
-        if used > maxPanels + 0.0001, used > 0 {
-            let scale = maxPanels / used
-            side *= scale
-            rev *= scale
-            if sidebarVisible { side = clampedSidebar(side) }
-            if reviewExpanded { rev = clampedReview(rev) }
-            // Re-check after clamp-to-band (band mins might re-break chat floor).
-            let used2 = (sidebarVisible ? side : 0) + (reviewExpanded ? rev : 0)
-            if used2 > maxPanels + 0.0001, used2 > 0 {
-                let scale2 = maxPanels / used2
-                if sidebarVisible { side *= scale2 }
-                if reviewExpanded { rev *= scale2 }
-            }
-        }
-        return FittedFractions(
-            sidebar: sidebarVisible ? side : clampedSidebar(sidebarFraction),
-            review: reviewExpanded ? rev : clampedReview(reviewFraction)
-        )
-    }
-
-    static func resolved(
-        host: CGFloat,
-        sidebarVisible: Bool,
-        reviewExpanded: Bool,
-        sidebarFraction: CGFloat,
-        reviewFraction: CGFloat
-    ) -> Resolved {
-        let h = max(1, host)
-        let fitted = fit(
-            sidebarVisible: sidebarVisible,
-            reviewExpanded: reviewExpanded,
-            sidebarFraction: sidebarFraction,
-            reviewFraction: reviewFraction
-        )
-        let handleBudget =
-            (sidebarVisible ? handleSlot : 0) + (reviewExpanded ? handleSlot : 0)
-        let content = max(1, h - handleBudget)
-        // Convert host-fractions into content-budget widths so handles don't
-        // silently steal from chat beyond the fraction model.
-        let sideShare = sidebarVisible ? fitted.sidebar : 0
-        let revShare = reviewExpanded ? fitted.review : 0
-        let panelShare = sideShare + revShare
-        let scale: CGFloat
-        if panelShare > 0.0001 {
-            // Panels take `panelShare` of host; map that onto `content` budget.
-            let panelPx = min(content, h * panelShare)
-            scale = panelPx / (h * panelShare)
-        } else {
-            scale = 1
-        }
-        let sidebarW = sidebarVisible ? (h * fitted.sidebar * scale) : 0
-        let reviewW = reviewExpanded ? (h * fitted.review * scale) : 0
-        let chatW = max(1, content - sidebarW - reviewW)
-        return Resolved(sidebarWidth: sidebarW, chatWidth: chatW, reviewWidth: reviewW)
-    }
-
-    static func loadSidebarFraction() -> CGFloat {
-        let raw = UserDefaults.standard.double(forKey: sidebarFractionKey)
-        if raw > 0.01, raw < 0.99 { return clampedSidebar(CGFloat(raw)) }
-        // One-shot migrate from legacy pt width (assume ~1440 host).
-        let legacy = UserDefaults.standard.double(forKey: legacySidebarWidthKey)
-        if legacy > 40 {
-            return clampedSidebar(CGFloat(legacy) / 1440)
-        }
-        return sidebarDefault
-    }
-
-    static func loadReviewFraction() -> CGFloat {
-        let raw = UserDefaults.standard.double(forKey: reviewFractionKey)
-        if raw > 0.01, raw < 0.99 { return clampedReview(CGFloat(raw)) }
-        let legacy = UserDefaults.standard.double(forKey: legacyReviewWidthKey)
-        if legacy > 40 {
-            return clampedReview(CGFloat(legacy) / 1440)
-        }
-        return reviewDefault
-    }
-
-    static func saveSidebarFraction(_ f: CGFloat) {
-        UserDefaults.standard.set(Double(clampedSidebar(f)), forKey: sidebarFractionKey)
-    }
-
-    static func saveReviewFraction(_ f: CGFloat) {
-        UserDefaults.standard.set(Double(clampedReview(f)), forKey: reviewFractionKey)
-    }
-}
+// MARK: - Column layout policy lives in WorkspaceLayout.swift
 
 // MARK: - Toolbar toggle (sits next to toolbar search)
 

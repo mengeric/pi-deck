@@ -40,7 +40,7 @@ private struct CodingAgentPanelLayers<Nav: View, Panel: View>: View {
             nav()
                 // Recedes slightly in scale as well as position — reads as the
                 // nav dropping back a layer while the panel grows over it.
-                .scaleEffect(isPanelExpanded ? 0.98 : 1, anchor: .top)
+                .scaleEffect(isPanelExpanded ? 0.98 : 1, anchor: .topLeading)
                 .offset(y: isPanelExpanded ? -24 : 0)
                 .animation(PanelTransition.move, value: isPanelExpanded)
                 .opacity(isPanelExpanded ? 0 : 1)
@@ -54,6 +54,9 @@ private struct CodingAgentPanelLayers<Nav: View, Panel: View>: View {
                 .animation(PanelTransition.fade, value: isPanelExpanded)
                 .allowsHitTesting(isPanelExpanded)
         }
+        // Column host assigns width; layers must hug leading and never center-overflow.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .clipped()
     }
 }
 
@@ -646,7 +649,8 @@ struct ContentView: View {
                 PiAgentRepoReviewPanel(viewModel: viewModel)
             }
         )
-        .frame(minWidth: 1080, minHeight: 640)
+        // Soft product floor; layout breakpoints handle Review overlay below 1100.
+        .frame(minWidth: 900, minHeight: 640)
         .onAppear {
             sidebarFraction = ThreeColumnLayout.loadSidebarFraction()
             reviewFraction = ThreeColumnLayout.loadReviewFraction()

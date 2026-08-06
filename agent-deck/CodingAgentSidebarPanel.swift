@@ -53,11 +53,14 @@ struct CodingAgentPanelHeader<Trailing: View>: View {
                 .font(AppTheme.Font.headline)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
                 .help(isExpanded ? languageStore.t("session.collapse") : languageStore.t("session.expand"))
 
-            Spacer(minLength: 8)
+            Spacer(minLength: 4)
 
             trailing
+                .layoutPriority(0)
 
             AppCircleIconButton(
                 style: .neutral,
@@ -68,7 +71,10 @@ struct CodingAgentPanelHeader<Trailing: View>: View {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
             }
             .accessibilityLabel(isExpanded ? languageStore.t("session.collapse") : languageStore.t("session.expand"))
+            .layoutPriority(1)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipped()
     }
 }
 

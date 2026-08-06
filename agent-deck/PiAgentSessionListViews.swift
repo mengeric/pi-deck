@@ -233,7 +233,10 @@ struct PiAgentNewSessionSplitButton: View {
             }
         }
         .foregroundStyle(AppTheme.brandAccent)
-        .fixedSize()
+        // Hug content vertically, but never force the parent sidebar wider than
+        // the host-assigned frame (`.fixedSize()` was a root cause of left clip).
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .glassEffect(.regular.tint(AppTheme.brandAccent.opacity(0.18)), in: Capsule(style: .continuous))
         .contentShape(Capsule(style: .continuous))
         .sheet(isPresented: $isImportSheetPresented) {
@@ -684,7 +687,8 @@ struct PiAgentSessionRow: View, Equatable {
             .animation(isGeneratingTitle ? .easeInOut(duration: 0.85).repeatForever(autoreverses: true) : .default, value: isGeneratingTitle)
             .layoutPriority(1)
             .font(AppTheme.Font.footnote.weight(.medium))
-            .fontWidth(.expanded)
+            // Default width — `.expanded` inflated intrinsic width and fought
+            // percentage sidebars (overflow centered → left edge clipped).
             .foregroundStyle(.primary)
             // Fixed height so the row never depends on title text measurement.
             .frame(height: 18, alignment: .center)
