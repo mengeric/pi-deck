@@ -90,9 +90,17 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
     // Review
     private let reviewMin: CGFloat = 320
     private let reviewMax: CGFloat = 900
-    // Chat floor while Review is open
+    // Chat floor while Review is open — never steal below this for review max.
     private let chatMin: CGFloat = 420
+    /// Visible hairline track width inside the drag handle.
     private let handleWidth: CGFloat = 10
+    /// Horizontal padding applied around each handle (each side).
+    /// Must be included in column math — `.padding(.horizontal:)` expands the
+    /// HStack slot beyond `handleWidth` and used to crush the chat column when
+    /// Review is dragged to its computed "max".
+    private let handlePad: CGFloat = 6
+    /// Full HStack width consumed by one splitter (track + pads).
+    private var handleSlot: CGFloat { handleWidth + handlePad * 2 }
 
     @State private var hostWidth: CGFloat = 0
     @State private var chatColumnWidth: CGFloat = 0
@@ -133,8 +141,8 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
                 onDragChanged: handleSidebarDragChanged,
                 onDragEnded: handleSidebarDragEnded
             )
-            .frame(width: isSidebarVisible ? handleWidth : 0)
-            .padding(.horizontal, isSidebarVisible ? 6 : 0)
+            // Fixed slot = handleSlot so padding cannot inflate layout beyond budget.
+            .frame(width: isSidebarVisible ? handleSlot : 0)
             .opacity(isSidebarVisible ? 1 : 0)
             .allowsHitTesting(isSidebarVisible)
 
@@ -158,8 +166,7 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
                 onDragChanged: handleReviewDragChanged,
                 onDragEnded: handleReviewDragEnded
             )
-            .frame(width: isReviewExpanded ? handleWidth : 0)
-            .padding(.horizontal, isReviewExpanded ? 6 : 0)
+            .frame(width: isReviewExpanded ? handleSlot : 0)
             .contentShape(Rectangle())
             .zIndex(30)
             .allowsHitTesting(isReviewExpanded)
@@ -221,28 +228,37 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
     }
 
     private var clampedReviewWidth: CGFloat {
-        min(effectiveMaxReviewWidth, max(reviewMin, reviewPanelWidth))
+        let maxW = effectiveMaxReviewWidth
+        // Prefer reviewMin when the host has room; never exceed maxW (chat floor).
+        // If the window is too narrow for reviewMin + chatMin, shrink review —
+        // do not crush the transcript column (that produced the "max review" mess).
+        if maxW < reviewMin { return max(0, maxW) }
+        return min(maxW, max(reviewMin, reviewPanelWidth))
     }
 
     /// Max review so chat keeps `chatMin` and sidebar keeps its current width.
+    ///
+    /// - Returns: Width in points; may be below `reviewMin` on tight hosts.
+    /// - Note: Must never use `max(reviewMin, available)` — that forced Review
+    ///   to stay wide and stole space from chat when the host was tight.
     private var effectiveMaxReviewWidth: CGFloat {
         let host = hostWidth > 1 ? hostWidth : 1400
-        // Reserve: sidebar + sidebar|chat handle + chatMin + chat|review handle.
-        // When the sidebar is hidden, it and its handle take no width.
-        let sidebarPart = isSidebarVisible ? (clampedSidebarWidth + handleWidth) : 0
-        let reviewHandle = isReviewExpanded ? handleWidth : 0
-        let reserved = sidebarPart + chatMin + reviewHandle
-        let fromHost = max(reviewMin, host - reserved)
-        return min(reviewMax, fromHost)
+        // Reserve: sidebar + sidebar|chat handleSlot + chatMin + chat|review handleSlot.
+        let sidebarPart = isSidebarVisible ? (clampedSidebarWidth + handleSlot) : 0
+        let reviewHandle = isReviewExpanded ? handleSlot : 0
+        let available = host - sidebarPart - chatMin - reviewHandle
+        return min(reviewMax, max(0, available))
     }
 
     private func clampWidthsToHost() {
         guard hostWidth > 1 else { return }
+        var changed = false
         let maxReview = effectiveMaxReviewWidth
-        if isReviewExpanded, reviewPanelWidth > maxReview {
+        if isReviewExpanded, reviewPanelWidth > maxReview + 0.5 {
             var txn = Transaction()
             txn.disablesAnimations = true
             withTransaction(txn) { reviewPanelWidth = maxReview }
+            changed = true
         }
         // Sidebar stays in its own min/max; no host-based shrink of sidebar for now.
         let side = clampedSidebarWidth
@@ -250,6 +266,12 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
             var txn = Transaction()
             txn.disablesAnimations = true
             withTransaction(txn) { sidebarWidth = side }
+            changed = true
+        }
+        // After a forced shrink (e.g. Review at max on a tight host), re-publish
+        // chat width so transcript cards reflow instead of staying wide/clipped.
+        if changed {
+            postTranscriptLiveResize(final: true)
         }
     }
 
@@ -257,8 +279,8 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
     private func expectedChatWidth(reviewW: CGFloat, sidebarW: CGFloat) -> CGFloat {
         let host = hostWidth > 1 ? hostWidth : 0
         if host > 1 {
-            // Always: sidebar|chat handle. Plus chat|review handle when review visible.
-            let handleTotal = handleWidth + (reviewW > 0.5 ? handleWidth : 0)
+            // Always: sidebar|chat handleSlot. Plus chat|review handleSlot when open.
+            let handleTotal = handleSlot + (reviewW > 0.5 ? handleSlot : 0)
             return max(chatMin, host - sidebarW - reviewW - handleTotal)
         }
         if chatColumnWidth > 1 {
@@ -338,11 +360,11 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
         // Handle right of sidebar: drag right → wider sidebar.
         let next = origin + value.translation.width
         let clamped = min(sidebarMax, max(sidebarMin, next))
-        // Also ensure chat+review still fit.
+        // Also ensure chat+review still fit (use full handleSlot budgets).
         let host = hostWidth > 1 ? hostWidth : 1400
-        let reviewPart = isReviewExpanded ? (clampedReviewWidth + handleWidth) : 0
+        let reviewPart = isReviewExpanded ? (clampedReviewWidth + handleSlot) : 0
         // host − sidebarHandle − chatMin − (review+handle if open)
-        let maxSide = max(sidebarMin, host - handleWidth - chatMin - reviewPart)
+        let maxSide = max(sidebarMin, host - handleSlot - chatMin - reviewPart)
         let finalSide = min(clamped, maxSide)
         var txn = Transaction()
         txn.disablesAnimations = true
@@ -368,7 +390,10 @@ struct ThreeColumnWorkspaceHost<Sidebar: View, Main: View, Panel: View>: View {
         let origin = reviewDragOrigin ?? clampedReviewWidth
         // Handle left of review: drag left → wider review.
         let next = origin - value.translation.width
-        let clamped = min(effectiveMaxReviewWidth, max(reviewMin, next))
+        let maxW = effectiveMaxReviewWidth
+        // Allow drag below reviewMin only when the host cannot afford both mins.
+        let minW = maxW < reviewMin ? 0 : reviewMin
+        let clamped = min(maxW, max(minW, next))
         var txn = Transaction()
         txn.disablesAnimations = true
         withTransaction(txn) { reviewPanelWidth = clamped }
