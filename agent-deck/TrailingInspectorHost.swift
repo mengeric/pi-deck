@@ -56,14 +56,15 @@ struct TrailingInspectorHost: View {
     @Bindable var viewModel: AppViewModel
     @ObservedObject private var languageStore = LanguageStore.shared
 
-    private let railWidth: CGFloat = ThreeColumnLayout.trailingRailWidth - 4
+    private let railWidth: CGFloat = ThreeColumnLayout.trailingRailWidth
 
     var body: some View {
+        // No spring / move transition here: NSSplitView already resizes the strip
+        // via setPosition; animating the HStack in parallel causes expand/collapse jitter.
         HStack(spacing: 0) {
             if viewModel.isTrailingInspectorExpanded {
                 toolBody
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
 
                 Rectangle()
                     .fill(AppTheme.hairlineStroke.opacity(0.55))
@@ -74,9 +75,9 @@ struct TrailingInspectorHost: View {
             // Fixed rail — never removed when Review body collapses.
             toolRail
                 .frame(width: railWidth)
-                .padding(.vertical, 8)
+                .padding(.vertical, 6)
         }
-        .animation(.spring(response: 0.42, dampingFraction: 0.86), value: viewModel.isTrailingInspectorExpanded)
+        .transaction { $0.animation = nil }
         .background(AppTheme.windowBackground)
         .onAppear {
             // Migrate away from removed tools (e.g. former `.memory`).
@@ -143,20 +144,20 @@ struct TrailingInspectorHost: View {
                     Image("branch")
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 15, height: 15)
+                        .frame(width: 12, height: 12)
                 } else {
                     Image(systemName: tool.systemImage)
-                        .font(.system(size: 14, weight: selected ? .semibold : .regular))
+                        .font(.system(size: 12, weight: selected ? .semibold : .regular))
                 }
             }
             .foregroundStyle(selected ? Color.accentColor : AppTheme.mutedText)
-            .frame(width: 28, height: 28)
+            .frame(width: 24, height: 24)
             .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(selected ? Color.accentColor.opacity(0.14) : Color.clear)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .strokeBorder(
                         selected ? Color.accentColor.opacity(0.35) : Color.clear,
                         lineWidth: 1

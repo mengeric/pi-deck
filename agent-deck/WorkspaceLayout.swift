@@ -46,7 +46,8 @@ nonisolated enum ThreeColumnLayout: Sendable {
     nonisolated static var handleSlot: CGFloat { handleWidth + handlePad * 2 }
 
     /// Fixed trailing activity rail width (always visible; Review body toggles beside it).
-    nonisolated static let trailingRailWidth: CGFloat = 44
+    /// ~⅔ of the previous 44pt strip so icons stay tappable without a wide dead gutter.
+    nonisolated static let trailingRailWidth: CGFloat = 30
 
     /// Overlay Review width as a fraction of host when not docked.
     nonisolated static let overlayReviewMinFraction: CGFloat = 0.28

@@ -483,10 +483,9 @@ extension AppViewModel {
 
     func openRepoChangesForSelectedPiAgentSession() {
         prepareRepoChangesForSelectedPiAgentSession(force: true)
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
-            trailingInspectorTool = .review
-            isTrailingInspectorExpanded = true
-        }
+        // Instant toggle — split pane width is applied by WorkspaceSplitHost without animation.
+        trailingInspectorTool = .review
+        isTrailingInspectorExpanded = true
     }
 
     func toggleTrailingInspector() {
@@ -498,9 +497,8 @@ extension AppViewModel {
     }
 
     func collapseTrailingInspector() {
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
-            isTrailingInspectorExpanded = false
-        }
+        // Instant collapse to avoid fighting NSSplitView setPosition (was spring-jittery).
+        isTrailingInspectorExpanded = false
     }
 
     /// Absolute file URL under the active review repository root.
