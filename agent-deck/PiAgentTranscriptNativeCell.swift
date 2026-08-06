@@ -572,8 +572,20 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
 
     // MARK: Layout
 
-    private var hPad: CGFloat { (payload?.isThreadChild ?? false) ? AppTheme.Chat.bubbleChildHPadding : AppTheme.Chat.bubbleHPadding }
-    private var vPad: CGFloat { (payload?.isThreadChild ?? false) ? AppTheme.Chat.bubbleChildVPadding : AppTheme.Chat.bubbleVPadding }
+    /// Assistant/thinking render as flat document rows (ChatGPT / Codex app style).
+    private var usesFlatChrome: Bool {
+        guard let role = payload?.role else { return false }
+        return role == .assistant || role == .thinking
+    }
+
+    private var hPad: CGFloat {
+        if usesFlatChrome { return 8 }
+        return (payload?.isThreadChild ?? false) ? AppTheme.Chat.bubbleChildHPadding : AppTheme.Chat.bubbleHPadding
+    }
+    private var vPad: CGFloat {
+        if usesFlatChrome { return 6 }
+        return (payload?.isThreadChild ?? false) ? AppTheme.Chat.bubbleChildVPadding : AppTheme.Chat.bubbleVPadding
+    }
 
     // cardView placement / size — a fixed width plus a SINGLE, never-toggled
     // leading constraint. Its constant is set once in configure() from the known
@@ -825,22 +837,52 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
         guard let payload else { return }
         let neutral = payload.role == .status || payload.role == .raw
         let base = roleBaseColor(payload.role)
-        let fillOpacity: CGFloat = payload.isThreadChild ? AppTheme.roleFillOpacity : AppTheme.roleFillStrongOpacity
-        let fill: NSColor = neutral
-            ? AppTheme.ns(AppTheme.contentSubtleFill).withAlphaComponent(0.7)
-            : base.withAlphaComponent(fillOpacity)
-        let stroke: NSColor = neutral
-            ? AppTheme.ns(AppTheme.contentStroke)
-            : base.withAlphaComponent(AppTheme.roleStrokeOpacity)
+        let flat = payload.role == .assistant || payload.role == .thinking
+        let isUser = payload.role == .user
+
+        // Cell reuse: always reset corner + border before applying role chrome.
+        if isUser {
+            cardView.layer?.cornerRadius = AppTheme.Chat.userBubbleCornerRadius
+        } else {
+            cardView.layer?.cornerRadius = AppTheme.Chat.bubbleCornerRadius
+        }
+
+        let fill: NSColor
+        let stroke: NSColor
+        let borderWidth: CGFloat
+        if flat {
+            // ChatGPT / Codex: assistant is document text, not a filled card.
+            fill = .clear
+            stroke = .clear
+            borderWidth = 0
+        } else if isUser {
+            // Soft speech chip — tinted fill, no hairline.
+            let fillOpacity: CGFloat = payload.isThreadChild
+                ? AppTheme.roleFillOpacity
+                : AppTheme.roleFillStrongOpacity
+            fill = base.withAlphaComponent(max(fillOpacity, 0.12))
+            stroke = .clear
+            borderWidth = 0
+        } else if neutral {
+            fill = AppTheme.ns(AppTheme.contentSubtleFill).withAlphaComponent(0.7)
+            stroke = AppTheme.ns(AppTheme.contentStroke)
+            borderWidth = 1
+        } else {
+            let fillOpacity: CGFloat = payload.isThreadChild
+                ? AppTheme.roleFillOpacity
+                : AppTheme.roleFillStrongOpacity
+            fill = base.withAlphaComponent(fillOpacity)
+            stroke = base.withAlphaComponent(AppTheme.roleStrokeOpacity)
+            borderWidth = 1
+        }
 
         // Resolve through the view's effective appearance so light/dark is exact.
         effectiveAppearance.performAsCurrentDrawingAppearance {
             cardView.layer?.backgroundColor = fill.cgColor
             cardView.layer?.borderColor = stroke.cgColor
+            cardView.layer?.borderWidth = borderWidth
         }
-        // The glyph takes the bubble's own color (the same `base` driving the
-        // fill/stroke); neutral status/raw rows get a muted glyph to match their
-        // neutral fill.
+        // Glyph keeps role accent; flat assistant still tints the icon.
         if payload.headerAvatarImage == nil {
             iconView.contentTintColor = neutral ? AppTheme.ns(AppTheme.mutedText) : base
         }

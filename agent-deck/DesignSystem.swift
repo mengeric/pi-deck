@@ -151,7 +151,13 @@ enum AppTheme {
     // bubbles, tool cards, diff cards, and status rows visually consistent and
     // avoids the scatter of 6/8/10/11/12/14/16 radii that crept in ad-hoc.
     enum Chat {
+        // Transcript chrome policy (ChatGPT / Codex-app-adjacent):
+        // - Assistant / thinking: flat (no fill, no stroke) — document flow.
+        // - User / question: soft filled bubble, no hairline (speech chip).
+        // - Tool / memory / subagent surfaces: keep cardFill + cardStroke.
         static let bubbleCornerRadius: CGFloat = 12
+        /// Slightly rounder user chip (ChatGPT-like speech bubble).
+        static let userBubbleCornerRadius: CGFloat = 18
         static let cardCornerRadius: CGFloat = 12
         static let codeCornerRadius: CGFloat = 8
         static let inputCornerRadius: CGFloat = 8

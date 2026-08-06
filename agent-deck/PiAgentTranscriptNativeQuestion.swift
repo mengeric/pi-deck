@@ -744,7 +744,7 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
 
         cardView.translatesAutoresizingMaskIntoConstraints = false
         cardView.wantsLayer = true
-        cardView.layer?.cornerRadius = AppTheme.Chat.bubbleCornerRadius
+        cardView.layer?.cornerRadius = AppTheme.Chat.userBubbleCornerRadius
         cardView.layer?.cornerCurve = .continuous
         cardView.layer?.borderWidth = 1
         cardView.layer?.actions = [
@@ -1092,11 +1092,13 @@ final class PiAgentNativeQuestionView: NSView, PiAgentNativeRowContent {
 
     private func applyChromeColors() {
         let base = AppTheme.ns(AppTheme.roleUser)
-        let fill = base.withAlphaComponent(AppTheme.roleFillStrongOpacity)
-        let stroke = base.withAlphaComponent(AppTheme.roleStrokeOpacity)
+        // Soft speech chip — match native user bubble (no hairline stroke).
+        let fill = base.withAlphaComponent(max(AppTheme.roleFillStrongOpacity, 0.12))
+        let stroke = NSColor.clear
         effectiveAppearance.performAsCurrentDrawingAppearance {
             cardView.layer?.backgroundColor = fill.cgColor
             cardView.layer?.borderColor = stroke.cgColor
+            cardView.layer?.borderWidth = 0
             divider.layer?.backgroundColor = base.withAlphaComponent(AppTheme.roleStrokeOpacity).cgColor
         }
         // The glyph takes the bubble's own color (the same `base` driving the
