@@ -627,6 +627,9 @@ final class NativeMarkdownTextContainer: NSView {
                 // Code blocks and tables are deliberately full-width transcript
                 // surfaces; their internal padding/columns should never be guessed.
                 return ceiling
+            case .thematicBreak:
+                // Full-bleed rule; does not expand the natural content width.
+                width = 0
             }
             widest = max(widest, width)
             if widest >= ceiling { return ceiling }
@@ -785,6 +788,9 @@ final class NativeMarkdownTextContainer: NSView {
             // never reuse in place — an unchanged table is skipped by the identity
             // check in `reconcileBlocks`; a changed one swaps in a fresh grid.
             return false
+        case (.thematicBreak, .thematicBreak):
+            // No text content; chrome is identical.
+            return true
         default:
             return false
         }
@@ -860,6 +866,8 @@ final class NativeMarkdownTextContainer: NSView {
             // Tables never reuse via the text-view restyle path (see sameKindShape),
             // so this is unreachable; kept for switch exhaustiveness.
             return ""
+        case .thematicBreak:
+            return ""
         }
     }
 
@@ -873,8 +881,8 @@ final class NativeMarkdownTextContainer: NSView {
             return (MarkdownSemanticStyler.quoteFont, MarkdownSemanticStyler.quoteColor, true)
         case .code:
             return (NativeMarkdownFont.code, MarkdownSemanticStyler.codeBlockColor, false)
-        case .table:
-            // Unreachable (tables rebuild rather than restyle); kept for exhaustiveness.
+        case .table, .thematicBreak:
+            // Unreachable for restyle path; kept for exhaustiveness.
             return (NativeMarkdownFont.body, .labelColor, true)
         }
     }
@@ -1198,7 +1206,27 @@ final class NativeMarkdownTextContainer: NSView {
             return codeBlock(text)
         case let .table(table):
             return tableBlock(table)
+        case .thematicBreak:
+            return thematicBreakView()
         }
+    }
+
+    /// Thin full-width hairline for CommonMark thematic breaks (`---`).
+    private static func thematicBreakView() -> NSView {
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        let line = DynamicFillView(fill: AppTheme.ns(AppTheme.hairlineStroke.opacity(0.85)))
+        container.addSubview(line)
+        NSLayoutConstraint.activate([
+            line.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            line.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            line.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            line.heightAnchor.constraint(equalToConstant: 1),
+            container.heightAnchor.constraint(equalToConstant: 14)
+        ])
+        container.setContentHuggingPriority(.required, for: .vertical)
+        container.setContentCompressionResistancePriority(.required, for: .vertical)
+        return container
     }
 
     /// Native GFM table: builds each cell's attributed string (header cells bold,
@@ -2294,6 +2322,8 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
         case quote(String)
         case code(String)
         case table(MarkdownTable)
+        /// CommonMark thematic break (`---`, `***`, `___`).
+        case thematicBreak
     }
 
     let id: Int
@@ -2371,7 +2401,10 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
                 continue
             }
             defer { lineIndex += 1 }
-            if let heading = parseHeading(trimmed) {
+            if isThematicBreak(line) {
+                // Section rule — never leave raw `---` in a paragraph.
+                appendSimple(.thematicBreak)
+            } else if let heading = parseHeading(trimmed) {
                 appendSimple(.heading(level: heading.level, text: heading.text))
             } else if let bullet = parseBullet(trimmed) {
                 appendSimple(.bullet(bullet, indentLevel: indentLevel))
@@ -2410,6 +2443,27 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
             cursor += 1
         }
         return (MarkdownTable(header: header, alignments: alignments, rows: rows), cursor)
+    }
+
+    /// CommonMark thematic break: a line of only `-`, `*`, or `_` (same char),
+    /// at least three markers, optional spaces between them, ≤3 leading spaces.
+    /// Table separators (`|---|`) contain `|` and do not match.
+    private static func isThematicBreak(_ line: String) -> Bool {
+        var s = Substring(line)
+        var leadingSpaces = 0
+        while leadingSpaces < 4, let c = s.first, c == " " {
+            s.removeFirst()
+            leadingSpaces += 1
+        }
+        // 4+ spaces → indented code fence territory, not a break.
+        if leadingSpaces >= 4 { return false }
+        // Drop interior whitespace between markers.
+        let markers = s.filter { $0 != " " && $0 != "\t" }
+        guard markers.count >= 3 else { return false }
+        guard let first = markers.first, first == "-" || first == "*" || first == "_" else {
+            return false
+        }
+        return markers.allSatisfy { $0 == first }
     }
 
     /// A GFM separator row: cells of dashes with optional alignment colons, e.g.
@@ -3086,6 +3140,11 @@ private enum TranscriptAttributedStringCache {
             case let .code(text):
                 flushText()
                 result.append(.code(codeString(text)))
+            case .thematicBreak:
+                if current.length > 0 {
+                    current.append(NSAttributedString(string: "\n"))
+                }
+                current.append(thematicBreakString())
             default:
                 if current.length > 0 {
                     current.append(NSAttributedString(string: "\n"))
@@ -3109,9 +3168,25 @@ private enum TranscriptAttributedStringCache {
             return numberedString(number: number, text: text, indentLevel: indentLevel)
         case let .table(table):
             return tableString(table)
-        case .quote, .code:
+        case .quote, .code, .thematicBreak:
             return NSAttributedString() // handled by the caller
         }
+    }
+
+    /// Em-dash rule for attributed-string markdown paths (native bubble uses NSView).
+    private static func thematicBreakString() -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.paragraphSpacingBefore = 4
+        paragraph.paragraphSpacing = 4
+        paragraph.alignment = .center
+        return NSAttributedString(
+            string: String(repeating: "\u{2500}", count: 24),
+            attributes: [
+                .font: NativeMarkdownFont.body,
+                .foregroundColor: AppTheme.ns(AppTheme.hairlineStroke),
+                .paragraphStyle: paragraph
+            ]
+        )
     }
 
     /// Monospace, column-aligned rendering of a table for this attributed-string
