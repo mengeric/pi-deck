@@ -260,20 +260,11 @@ extension PiAgentAppKitTranscriptView.Coordinator {
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        // With `usesAutomaticRowHeights == true`, AppKit uses this return value
+        // only as an *estimated* height for scroll metrics / first paint.
+        // Final tile height comes from Auto Layout fitting of the cell.
         guard row < orderedIDs.count else { return estimatedRowHeight }
         let id = orderedIDs[row]
-        // Whatever this method returns IS what AppKit tiles the row at, so it
-        // is the one true baseline for "does a fresh measurement need a
-        // re-tile". Recording it here keeps `lastNotedHeight` honest across
-        // session switches and snapshot applies, where AppKit re-tiles every
-        // row through this path without going near `noteHeightsChanged`.
-        // (Captured failure: switch away + back left lastNotedHeight at the
-        // old 157 while the table re-tiled from a poisoned 56 cache entry —
-        // the cell's correct 157 report then matched the stale baseline and
-        // was swallowed, leaving the subagent card cropped for the whole run.)
-        // Prefer a real measurement for the current width — it survives
-        // width changes and session switches, so a revisited row lays out at
-        // its exact height with no reflow.
         if let measured = measuredHeightByID[id]?[widthBucket] {
             lastNotedHeight[id] = measured
             return measured
@@ -282,10 +273,6 @@ extension PiAgentAppKitTranscriptView.Coordinator {
             lastNotedHeight[id] = estimate
             return estimate
         }
-        // No measurement yet — use the item's fast estimator so the table can lay
-        // the row out close to its natural size without triggering a SwiftUI pass.
-        // The cell measures precisely as it renders and reports back via
-        // reportMeasuredHeight, at which point this row gets re-tiled.
         if let item = itemByID[id] {
             let est = item.estimatedHeight(contentWidth)
             estimateByID[id] = est

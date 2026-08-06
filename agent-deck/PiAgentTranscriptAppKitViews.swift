@@ -47,7 +47,10 @@ struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         // rather than this uniform value. See `PiAgentAppKitTranscriptItem`.
         tableView.intercellSpacing = NSSize(width: 0, height: 0)
         tableView.rowHeight = 120
-        tableView.usesAutomaticRowHeights = false
+        // Row height comes from Auto Layout (content chain + markdown
+        // intrinsics). Manual measuredHeightByID / heightOfRow remain only as
+        // *estimates* and invalidation hints — not the source of truth.
+        tableView.usesAutomaticRowHeights = true
         // The default `.automatic` style resolves to `.inset`, which adds a
         // system horizontal margin (~16pt) to every cell. That pushed all rows
         // inboard of the composer (which lives outside the table). `.plain`
@@ -571,7 +574,11 @@ struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 // it silently yields during that transient and is satisfied exactly
                 // once the real row height lands (measurement is unaffected — height
                 // comes from `spec.measure`, not these pins).
-                bottom.priority = .required - 1
+                // With automatic row heights the cell's height is derived from
+                // this chain; keep bottom just under required so AppKit's brief
+                // 17pt encapsulated height during apply cannot unsatisfiably
+                // fight content, then settles to the true fitting height.
+                bottom.priority = NSLayoutConstraint.Priority(999)
                 NSLayoutConstraint.activate([
                     row.leadingAnchor.constraint(equalTo: leadingAnchor),
                     row.trailingAnchor.constraint(equalTo: trailingAnchor),

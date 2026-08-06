@@ -622,11 +622,9 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
         contentLeadingC = contentStack.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: hPad)
         contentTrailingC = contentStack.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -hPad)
         contentBottomC = contentStack.bottomAnchor.constraint(equalTo: cardView.bottomAnchor, constant: -vPad)
-        // The cell imposes a fixed height (NSView-Encapsulated-Layout-Height). If a
-        // measured height is even 1pt short of the content's required intrinsic
-        // height, that fixed height vs. the required content height is unsatisfiable
-        // and AppKit logs a constraint-conflict storm. Let this bottom pin yield
-        // (just below required) so the fixed cell height always wins gracefully.
+        // Automatic row heights: content must *define* card height. Priority 999
+        // still yields to AppKit's transient encapsulated height during apply
+        // without permanently compressing content under a stale manual tile.
         contentBottomC.priority = NSLayoutConstraint.Priority(999)
         contentTopC = contentStack.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: headerSpacing)
 
@@ -973,6 +971,12 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
             markdownAppliers.removeLast().cancel()
             markdownContainers.removeLast()
         }
+        // Seed heightCache so automatic row heights can read intrinsicContentSize
+        // without a side-effecting measure during update-constraints.
+        for container in markdownContainers {
+            _ = container.measureHeight(forWidth: innerWidth)
+        }
+        onIntrinsicHeightChange?()
     }
 
     private func imagePresentation() -> (source: String, references: [PiAgentTranscriptImageReference]) {

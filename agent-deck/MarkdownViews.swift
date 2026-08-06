@@ -922,7 +922,7 @@ final class NativeMarkdownTextContainer: NSView {
             // those and leaves the rest cached, instead of re-laying-out every block.
             stackView.layoutSubtreeIfNeeded()
             let height = ceil(stackView.fittingSize.height)
-            heightCache = (width, height)
+            publishHeightCache(width: width, height: height)
 #if DEBUG
             TranscriptStreamWobbleProbe.recordMeasure(path: .cheapSingle, width: width, height: height)
 #endif
@@ -942,7 +942,7 @@ final class NativeMarkdownTextContainer: NSView {
         invalidateBlockIntrinsics(in: stackView)
         stackView.layoutSubtreeIfNeeded()
         let height = ceil(stackView.fittingSize.height)
-        heightCache = (width, height)
+        publishHeightCache(width: width, height: height)
         lastFullLayoutWidth = width
 #if DEBUG
         // pass1 vs height (pass2) diverging means the measure disagreed with itself
@@ -975,13 +975,24 @@ final class NativeMarkdownTextContainer: NSView {
         return ceil(stackView.fittingSize.height)
     }
 
-    // Must be side-effect-free: AppKit calls this during the window's update-constraints
-    // pass, and `measureHeight` mutates an active layout constraint, which re-enters the
-    // constraint engine and loops the window's update-constraints pass until AppKit bails.
-    // SwiftUI sizes us via `sizeThatFits` → `measureHeight` directly (NSViewRepresentable
-    // doesn't honour intrinsicContentSize), so AppKit's intrinsic path can defer.
+    // Must be side-effect-free: never call `measureHeight` here (it mutates
+    // constraints and can loop update-constraints). Serve the last measured
+    // height so NSTableView automatic row heights / stack fitting can size the
+    // row; `layout` / configure refresh the cache via `measureHeight`.
     override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+        if let heightCache, heightCache.height > 0, heightCache.height.isFinite {
+            return NSSize(width: NSView.noIntrinsicMetric, height: heightCache.height)
+        }
+        return NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
+
+    /// Update height cache and notify Auto Layout (automatic row heights).
+    private func publishHeightCache(width: CGFloat, height: CGFloat) {
+        let previous = heightCache?.height
+        heightCache = (width, height)
+        if previous == nil || abs((previous ?? 0) - height) > 0.5 {
+            invalidateIntrinsicContentSize()
+        }
     }
 
     private func configureWidthConstraint(to width: CGFloat) {
