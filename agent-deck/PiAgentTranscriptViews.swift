@@ -791,21 +791,40 @@ extension EnvironmentValues {
 /// the transcript's "only the bottom child grows, and only vertically"
 /// zero-jumpiness design.
 ///
-/// ChatGPT-style: replies fill the column (minus action gutter); user bubbles
-/// hug on the right with a lower max fraction. Not two rigid half-panes.
+/// Adaptive ChatGPT-style metrics (option 2):
+/// - **Narrow chat column**: fill more of the pane (compact); slightly smaller gutter.
+/// - **Mid**: replies fill column − gutter; user ~70% hug.
+/// - **Wide / ultrawide**: replies soft-cap at a readable line length so prose
+///   does not stretch edge-to-edge; user fraction eases down.
+///
+/// All helpers are pure functions of `paneWidth` so live splitter drag can call
+/// them every frame via `applyRowWidth` without I/O. Height reflow still settles
+/// after resize (Coordinator live-resize path) — only card widths track live.
 @MainActor
 enum PiAgentBubbleWidth {
-    /// Trailing (replies) / leading (user) space for hover copy/fork buttons.
-    /// Matches `ThreadMessageRow` spacer and the two-button overlay (~70pt).
+    /// Default trailing gutter for hover copy/fork (~two glass buttons).
+    /// Prefer `actionGutter(for:)` when laying out against a live pane width.
     static let actionGutter: CGFloat = 72
 
-    // Agent reply / tool / plan — fill the content column (ChatGPT-style),
-    // minus the action gutter. Soft absolute ceiling for extreme ultrawide only.
-    static let replyCapMultiplier: CGFloat = 1.0
-    static let replyCapMax: CGFloat = 1_600
+    /// Compact gutter when the chat column is tight (three-column + review open).
+    static let actionGutterCompact: CGFloat = 52
 
-    // User bubble — hug text; long prompts cap ~70% so they read as a right-side
-    // chip (ChatGPT-style), not a full-width bar.
+    // Agent reply / tool / plan.
+    // Mid columns still fill (multiplier 1). Wide columns soft-cap for readability.
+    static let replyCapMultiplier: CGFloat = 1.0
+    /// Soft readable line-length target (~65–75ch at body size). Continuous;
+    /// not a hard cliff — see `replyCap(for:)`.
+    static let replyReadableMax: CGFloat = 880
+    /// Absolute ceiling for extreme ultrawide (tables / code may use more).
+    static let replyCapMax: CGFloat = 1_100
+
+    /// Pane width below which layout treats the column as "compact".
+    static let narrowPane: CGFloat = 480
+    /// Pane width above which readable soft-cap begins to engage.
+    static let widePane: CGFloat = 920
+
+    // User bubble — hug text; long prompts use a right-side fraction of the pane.
+    /// Mid-width default fraction (tests and docs refer to this).
     static let userCapMultiplier: CGFloat = 0.70
     static let userCapMax: CGFloat = 720
     static let userMinWidth: CGFloat = 120
@@ -814,11 +833,96 @@ enum PiAgentBubbleWidth {
     /// native bubble cannot drift apart.
     static let userChrome: CGFloat = AppTheme.Chat.bubbleHPadding * 2 + 2
 
+    /// Linear interpolation clamped to `[0, 1]` for `t`.
+    ///
+    /// - Parameters:
+    ///   - a: Start value (required).
+    ///   - b: End value (required).
+    ///   - t: Unclamped progress (required).
+    /// - Returns: Blended `CGFloat`.
+    /// - Throws: Never.
+    static func lerp(_ a: CGFloat, _ b: CGFloat, t: CGFloat) -> CGFloat {
+        let u = min(1, max(0, t))
+        return a + (b - a) * u
+    }
+
+    /// Action-button gutter for the given chat pane width (narrow → compact).
+    ///
+    /// - Parameter paneWidth: Transcript content column width in points (required).
+    /// - Returns: Gutter width to reserve on the reply trailing edge.
+    /// - Throws: Never.
+    static func actionGutter(for paneWidth: CGFloat) -> CGFloat {
+        let w = max(1, paneWidth)
+        if w <= narrowPane { return actionGutterCompact }
+        if w >= 600 { return actionGutter }
+        // 480…600: ease compact → default so live resize does not jump.
+        return lerp(actionGutterCompact, actionGutter, t: (w - narrowPane) / (600 - narrowPane))
+    }
+
+    /// User long-message fraction of the pane (higher on narrow = less wasted margin).
+    ///
+    /// - Parameter paneWidth: Transcript content column width (required).
+    /// - Returns: Multiplier in roughly `0.60…0.90`.
+    /// - Throws: Never.
+    static func userCapMultiplier(for paneWidth: CGFloat) -> CGFloat {
+        let w = max(1, paneWidth)
+        if w <= narrowPane { return 0.88 }
+        if w <= 720 {
+            return lerp(0.88, userCapMultiplier, t: (w - narrowPane) / (720 - narrowPane))
+        }
+        if w <= 1_200 {
+            return lerp(userCapMultiplier, 0.60, t: (w - 720) / (1_200 - 720))
+        }
+        return 0.60
+    }
+
+    /// Absolute max width for a hugged user bubble at this pane width.
+    ///
+    /// - Parameter paneWidth: Transcript content column width (required).
+    /// - Returns: Cap in points (≤ `userCapMax`).
+    /// - Throws: Never.
+    static func userCapAbsolute(for paneWidth: CGFloat) -> CGFloat {
+        let w = max(1, paneWidth)
+        // Slightly lower absolute on very wide panes so chips stay "speech bubble".
+        if w >= 1_200 { return min(userCapMax, 680) }
+        return userCapMax
+    }
+
+    /// Maximum width allowed for a long user bubble (fraction × pane, absolute).
+    ///
+    /// - Parameter paneWidth: Transcript content column width (required).
+    /// - Returns: Cap used by `huggedUser`.
+    /// - Throws: Never.
+    static func userCap(for paneWidth: CGFloat) -> CGFloat {
+        let w = max(1, paneWidth)
+        return min(w * userCapMultiplier(for: w), userCapAbsolute(for: w), w)
+    }
+
     /// Fixed width for an agent reply / tool / plan card.
-    /// Fills the transcript column minus the action-button gutter.
+    /// Fills the usable column on mid widths; soft-caps for readability when wide.
+    ///
+    /// Live splitter drag calls this every frame via `applyRowWidth` — must stay
+    /// pure and continuous in `paneWidth` (no discrete jumps at thresholds).
+    ///
+    /// - Parameter paneWidth: Transcript content / table column width (required).
+    /// - Returns: Card width in points (always ≤ usable column).
+    /// - Throws: Never.
     static func replyCap(for paneWidth: CGFloat) -> CGFloat {
-        let column = max(1, paneWidth - actionGutter)
-        return min(column * replyCapMultiplier, replyCapMax, column)
+        let w = max(1, paneWidth)
+        let gutter = actionGutter(for: w)
+        let column = max(1, w - gutter)
+        // Fill the column until it exceeds the readable target, then ease down to
+        // `replyReadableMax` over ~120pt so live resize does not hard-clip.
+        let filled = min(column * replyCapMultiplier, column)
+        let capped: CGFloat
+        if filled <= replyReadableMax {
+            capped = filled
+        } else {
+            let over = filled - replyReadableMax
+            let blend = min(1, over / 120)
+            capped = lerp(filled, replyReadableMax, t: blend)
+        }
+        return max(1, min(capped, replyCapMax, column))
     }
 
     /// Content-hugging width for a user (question) bubble. Pure arithmetic plus
@@ -828,8 +932,15 @@ enum PiAgentBubbleWidth {
     /// (file/skill/command/paste/issue/image chips) — measured at the call
     /// site so a short message with wide pills still grows to fit them
     /// (within the same cap). Pass 0 when there are no chips.
+    ///
+    /// - Parameters:
+    ///   - text: Message body used for natural width (required).
+    ///   - pillsWidth: Extra width from attachment chips (optional, default 0).
+    ///   - paneWidth: Transcript column width (required).
+    /// - Returns: Card width in points.
+    /// - Throws: Never.
     static func huggedUser(text: String, pillsWidth: CGFloat = 0, paneWidth: CGFloat) -> CGFloat {
-        let cap = min(paneWidth * userCapMultiplier, userCapMax)
+        let cap = userCap(for: paneWidth)
         // Fenced code renders in a monospace font this measurement can't model;
         // let those messages fill the cap rather than risk wrapping code.
         if text.contains("```") { return cap }

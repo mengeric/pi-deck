@@ -181,10 +181,7 @@ final class BubbleHeaderAlignmentTests: XCTestCase {
 
     func testLongUserBubbleStillStopsAtTheDefinedMaximumWidth() {
         let paneWidth: CGFloat = 2_000
-        let expectedCap = min(
-            paneWidth * PiAgentBubbleWidth.userCapMultiplier,
-            PiAgentBubbleWidth.userCapMax
-        )
+        let expectedCap = PiAgentBubbleWidth.userCap(for: paneWidth)
 
         XCTAssertEqual(
             PiAgentBubbleWidth.huggedUser(
@@ -193,6 +190,45 @@ final class BubbleHeaderAlignmentTests: XCTestCase {
             ),
             expectedCap,
             accuracy: 0.5
+        )
+    }
+
+    /// Adaptive metrics must be continuous so live splitter drag does not jump.
+    func testAdaptiveReplyCapIsContinuousAndReadableOnWidePanes() {
+        var previous = PiAgentBubbleWidth.replyCap(for: 400)
+        for w in stride(from: 410, through: 1_600, by: 10) {
+            let cap = PiAgentBubbleWidth.replyCap(for: CGFloat(w))
+            let step = abs(cap - previous)
+            // Per 10pt pane change, card width should not leap more than ~12pt
+            // (fill tracks 1:1; soft-cap region is even flatter).
+            XCTAssertLessThanOrEqual(
+                step, 12.5,
+                "replyCap jumped by \(step) between pane \(w - 10) and \(w)"
+            )
+            previous = cap
+        }
+        // Ultrawide: readable soft-cap, not full column to 1600.
+        let wide = PiAgentBubbleWidth.replyCap(for: 1_600)
+        XCTAssertLessThanOrEqual(wide, PiAgentBubbleWidth.replyReadableMax + 1)
+        XCTAssertLessThanOrEqual(wide, PiAgentBubbleWidth.replyCapMax)
+        // Narrow: nearly fills column (minus compact gutter).
+        let narrowPane: CGFloat = 450
+        let narrow = PiAgentBubbleWidth.replyCap(for: narrowPane)
+        let narrowColumn = narrowPane - PiAgentBubbleWidth.actionGutter(for: narrowPane)
+        XCTAssertEqual(narrow, narrowColumn, accuracy: 1)
+    }
+
+    func testAdaptiveUserCapUsesMoreOfNarrowPane() {
+        let narrow = PiAgentBubbleWidth.userCap(for: 450)
+        let mid = PiAgentBubbleWidth.userCap(for: 900)
+        let wide = PiAgentBubbleWidth.userCap(for: 1_600)
+        XCTAssertGreaterThan(narrow / 450, mid / 900)
+        XCTAssertLessThanOrEqual(wide, PiAgentBubbleWidth.userCapMax)
+        XCTAssertGreaterThan(PiAgentBubbleWidth.userCapMultiplier(for: 450), 0.80)
+        XCTAssertEqual(
+            PiAgentBubbleWidth.userCapMultiplier(for: 900),
+            PiAgentBubbleWidth.userCapMultiplier,
+            accuracy: 0.05
         )
     }
 
