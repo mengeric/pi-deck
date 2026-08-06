@@ -575,10 +575,10 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
 
     // MARK: Layout
 
-    /// Assistant/thinking render as flat document rows (ChatGPT / Codex app style).
+    /// Assistant replies render as flat document rows (ChatGPT / Codex app style).
+    /// Thinking uses a soft role-tinted card so reasoning is visually distinct.
     private var usesFlatChrome: Bool {
-        guard let role = payload?.role else { return false }
-        return role == .assistant || role == .thinking
+        payload?.role == .assistant
     }
 
     private var hPad: CGFloat {
@@ -841,8 +841,9 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
         guard let payload else { return }
         let neutral = payload.role == .status || payload.role == .raw
         let base = roleBaseColor(payload.role)
-        let flat = payload.role == .assistant || payload.role == .thinking
+        let flat = payload.role == .assistant
         let isUser = payload.role == .user
+        let isThinking = payload.role == .thinking
 
         // Cell reuse: always reset corner + border before applying role chrome.
         if isUser {
@@ -859,6 +860,15 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
             fill = .clear
             stroke = .clear
             borderWidth = 0
+        } else if isThinking {
+            // Soft filled card (slightly stronger than tool chips) so multi-turn
+            // reasoning blocks scan as a band, not bare body text.
+            let fillOpacity: CGFloat = payload.isThreadChild
+                ? max(AppTheme.roleFillOpacity, 0.10)
+                : max(AppTheme.roleFillStrongOpacity, 0.14)
+            fill = base.withAlphaComponent(fillOpacity)
+            stroke = base.withAlphaComponent(AppTheme.roleStrokeOpacity)
+            borderWidth = 1
         } else if isUser {
             // Soft speech chip — tinted fill, no hairline.
             let fillOpacity: CGFloat = payload.isThreadChild
