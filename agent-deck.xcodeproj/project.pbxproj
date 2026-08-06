@@ -13,6 +13,7 @@
 		9D1B4A5C7E8F901234567890 /* bundled-skills in Resources */ = {isa = PBXBuildFile; fileRef = 9D1B4A5C7E8F901234567891 /* bundled-skills */; };
 		9D1B4A5C7E8F901234567A01 /* bundled-prompts in Resources */ = {isa = PBXBuildFile; fileRef = 9D1B4A5C7E8F901234567A02 /* bundled-prompts */; };
 		D2A5E8012FB0000000000001 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = D2A5E8032FB0000000000001 /* PostHog */; };
+		E1A2B3C69E2E4A2A89175011 /* gitdiff in Frameworks */ = {isa = PBXBuildFile; productRef = E1A2B3C59E2E4A2A89175011 /* gitdiff */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -77,6 +78,7 @@
 				5A92B5039E2E4A2A89175011 /* Sparkle in Frameworks */,
 				7C4E10039E2E4A2A89175011 /* Lottie in Frameworks */,
 				D2A5E8012FB0000000000001 /* PostHog in Frameworks */,
+				E1A2B3C69E2E4A2A89175011 /* gitdiff in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -135,6 +137,7 @@
 				5A92B5029E2E4A2A89175011 /* Sparkle */,
 				7C4E10029E2E4A2A89175011 /* Lottie */,
 				D2A5E8032FB0000000000001 /* PostHog */,
+				E1A2B3C59E2E4A2A89175011 /* gitdiff */,
 			);
 			productName = "agent-deck";
 			productReference = 6572B16B2FA2391500596CE4 /* Pi Deck.app */;
@@ -196,6 +199,7 @@
 				5A92B5019E2E4A2A89175011 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				7C4E10019E2E4A2A89175011 /* XCRemoteSwiftPackageReference "lottie-spm" */,
 				D2A5E8022FB0000000000001 /* XCRemoteSwiftPackageReference "posthog-ios" */,
+				E1A2B3C49E2E4A2A89175011 /* XCRemoteSwiftPackageReference "gitdiff" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 6572B16C2FA2391500596CE4 /* Products */;
@@ -605,6 +609,14 @@
 				minimumVersion = 3.66.1;
 			};
 		};
+		E1A2B3C49E2E4A2A89175011 /* XCRemoteSwiftPackageReference "gitdiff" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tornikegomareli/gitdiff.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.1.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -622,6 +634,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = D2A5E8022FB0000000000001 /* XCRemoteSwiftPackageReference "posthog-ios" */;
 			productName = PostHog;
+		};
+		E1A2B3C59E2E4A2A89175011 /* gitdiff */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E1A2B3C49E2E4A2A89175011 /* XCRemoteSwiftPackageReference "gitdiff" */;
+			productName = gitdiff;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

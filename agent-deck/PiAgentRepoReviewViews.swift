@@ -823,9 +823,15 @@ struct PiAgentRepoReviewPanel: View {
                         layout: .fill
                     )
                 } else if let text = viewModel.repositorySelectedDiffText {
-                    // Edge-to-edge code surface (no nested card padding).
-                    FullFileDiffView(diffText: text)
-                        .clipShape(Rectangle())
+                    // Phase 0: prefer open-source gitdiff; legacy FullFileDiffView via defaults key.
+                    Group {
+                        if GitDiffOSSView.prefersGitdiffRenderer {
+                            GitDiffOSSView(diffText: text)
+                        } else {
+                            FullFileDiffView(diffText: text)
+                        }
+                    }
+                    .clipShape(Rectangle())
                 } else if let error = viewModel.repositoryLastError {
                     Text(error)
                         .font(AppTheme.Font.caption)

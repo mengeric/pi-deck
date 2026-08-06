@@ -1,6 +1,15 @@
 {
-  "originHash" : "f950e68fa932d9e43b1b1fcacdc5ba1b609c3eb48bfa9e3a0bb0a0b1468b8967",
+  "originHash" : "0b1b0f2c54b9a0bbaa6a0db68ccf17917caff707d2d50c2d37db07fe52abb2de",
   "pins" : [
+    {
+      "identity" : "gitdiff",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tornikegomareli/gitdiff.git",
+      "state" : {
+        "revision" : "114b571a6dd0660ec9a57ba58a897964020f6bc2",
+        "version" : "0.1.0"
+      }
+    },
     {
       "identity" : "lottie-spm",
       "kind" : "remoteSourceControl",
