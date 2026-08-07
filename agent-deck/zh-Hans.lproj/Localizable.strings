@@ -2429,3 +2429,9 @@
 "review.diff.showMore" = "再显示 %d 行（剩余 %d）";
 "inspector.rail.hide" = "隐藏审阅栏";
 "inspector.rail.toggleHint" = "再点一次可隐藏面板";
+
+/* Diagram fences (Mermaid + SVG) */
+"diagram.mermaid" = "Mermaid 图";
+"diagram.rendering" = "正在渲染图…";
+"diagram.renderFailed" = "图渲染失败";
+"diagram.mermaidMissing" = "缺少 mermaid.min.js，无法渲染流程图";

@@ -2430,3 +2430,9 @@
 "review.diff.showMore" = "Show %d more lines (%d remaining)";
 "inspector.rail.hide" = "Hide review panel";
 "inspector.rail.toggleHint" = "Click again to hide the panel";
+
+/* Diagram fences (Mermaid + SVG) */
+"diagram.mermaid" = "Mermaid diagram";
+"diagram.rendering" = "Rendering diagram…";
+"diagram.renderFailed" = "Diagram render failed";
+"diagram.mermaidMissing" = "mermaid.min.js is missing from the app bundle";

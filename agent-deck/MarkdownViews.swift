@@ -623,8 +623,8 @@ final class NativeMarkdownTextContainer: NSView {
                 )
                 // 3pt quote bar + 9pt stack spacing.
                 width = 12 + measuredUnwrappedWidth(body, ceiling: max(1, ceiling - 12))
-            case .code, .table:
-                // Code blocks and tables are deliberately full-width transcript
+            case .code, .mermaid, .svg, .table:
+                // Code / diagram blocks and tables are deliberately full-width transcript
                 // surfaces; their internal padding/columns should never be guessed.
                 return ceiling
             case .thematicBreak:
@@ -783,6 +783,9 @@ final class NativeMarkdownTextContainer: NSView {
             return true
         case (.code, .code):
             return true
+        case (.mermaid, .mermaid), (.svg, .svg):
+            // Diagram hosts reconfigure in place via configure(raw:).
+            return true
         case (.table, .table):
             // A table is a multi-view grid, not a single restyleable text view, so
             // never reuse in place — an unchanged table is skipped by the identity
@@ -804,6 +807,15 @@ final class NativeMarkdownTextContainer: NSView {
         return nil
     }
 
+    /// Depth-first search for a typed subview (diagram hosts inside padded wrappers).
+    private static func firstSubview<T: NSView>(_ view: NSView, as type: T.Type) -> T? {
+        if let match = view as? T { return match }
+        for subview in view.subviews {
+            if let found = firstSubview(subview, as: type) { return found }
+        }
+        return nil
+    }
+
     private static func updateTextView(_ textView: NSTextView, with kind: MarkdownBlock.Kind) {
         // Keep the code-block copy control in sync when streaming restyles the fence body.
         if case let .code(text) = kind {
@@ -816,6 +828,10 @@ final class NativeMarkdownTextContainer: NSView {
                 ancestor = view.superview
             }
         }
+        // Diagram blocks are not text views — reconcile should swap the host view.
+        // If we land here, skip content mutation.
+        if case .mermaid = kind { return }
+        if case .svg = kind { return }
         let attr: NSAttributedString
         switch kind {
         case let .bullet(text, indentLevel):
@@ -856,7 +872,8 @@ final class NativeMarkdownTextContainer: NSView {
 
     private static func bodyText(from kind: MarkdownBlock.Kind) -> String {
         switch kind {
-        case let .heading(_, text), let .paragraph(text), let .quote(text), let .code(text):
+        case let .heading(_, text), let .paragraph(text), let .quote(text), let .code(text),
+             let .mermaid(text), let .svg(text):
             return text
         case let .bullet(text, _):
             return text
@@ -879,7 +896,7 @@ final class NativeMarkdownTextContainer: NSView {
             return (NativeMarkdownFont.body, .labelColor, true)
         case .quote:
             return (MarkdownSemanticStyler.quoteFont, MarkdownSemanticStyler.quoteColor, true)
-        case .code:
+        case .code, .mermaid, .svg:
             return (NativeMarkdownFont.code, MarkdownSemanticStyler.codeBlockColor, false)
         case .table, .thematicBreak:
             // Unreachable for restyle path; kept for exhaustiveness.
@@ -1096,7 +1113,18 @@ final class NativeMarkdownTextContainer: NSView {
                 // restyle the inner text view in place. If (unexpectedly) there's
                 // no text view to restyle, fall through to a fresh replacement.
                 if old[i] == new[i] { continue }
-                if let textView = Self.firstTextView(in: stackView.arrangedSubviews[slot]) {
+                let host = stackView.arrangedSubviews[slot]
+                if case let .mermaid(raw) = new[i].kind,
+                   let diagram = Self.firstSubview(host, as: MermaidBlockView.self) {
+                    diagram.configure(raw: raw)
+                    continue
+                }
+                if case let .svg(raw) = new[i].kind,
+                   let diagram = Self.firstSubview(host, as: SVGFenceBlockView.self) {
+                    diagram.configure(raw: raw)
+                    continue
+                }
+                if let textView = Self.firstTextView(in: host) {
                     Self.updateTextView(textView, with: new[i].kind)
                     continue
                 }
@@ -1204,11 +1232,29 @@ final class NativeMarkdownTextContainer: NSView {
             return quoteBlock(text)
         case let .code(text):
             return codeBlock(text)
+        case let .mermaid(text):
+            return mermaidBlock(text)
+        case let .svg(text):
+            return svgFenceBlock(text)
         case let .table(table):
             return tableBlock(table)
         case .thematicBreak:
             return thematicBreakView()
         }
+    }
+
+    /// Mermaid diagram fence → lazy mermaid.js render into SVG.
+    private static func mermaidBlock(_ source: String) -> NSView {
+        let view = MermaidBlockView(frame: .zero)
+        view.configure(raw: source)
+        return paddedBlock(view, padding: NSEdgeInsets(top: 4, left: 0, bottom: 4, right: 0))
+    }
+
+    /// Raw SVG fence → static SVG web surface.
+    private static func svgFenceBlock(_ source: String) -> NSView {
+        let view = SVGFenceBlockView(frame: .zero)
+        view.configure(raw: source)
+        return paddedBlock(view, padding: NSEdgeInsets(top: 4, left: 0, bottom: 4, right: 0))
     }
 
     /// Thin full-width hairline for CommonMark thematic breaks (`---`).
@@ -2321,6 +2367,10 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
         case numbered(Int, String, indentLevel: Int)
         case quote(String)
         case code(String)
+        /// Fenced ` ```mermaid ` diagram (optional `%% mermaid-hash:` lines in body).
+        case mermaid(String)
+        /// Fenced ` ```svg ` raw vector markup.
+        case svg(String)
         case table(MarkdownTable)
         /// CommonMark thematic break (`---`, `***`, `___`).
         case thematicBreak
@@ -2336,6 +2386,8 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
         var code: [String] = []
         var codeFenceIndent = 0
         var inCode = false
+        /// Info string on the opening fence (`mermaid`, `svg`, `swift`, …).
+        var codeFenceLanguage: String?
 
         // CommonMark: a fenced code block strips up to the opening fence's own
         // indentation from each content line — so a fence nested inside a list
@@ -2362,6 +2414,22 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
             blocks.append(.init(id: blocks.count, kind: kind))
         }
 
+        func appendClosedFence() {
+            let body = code.joined(separator: "\n")
+            let lang = codeFenceLanguage?.lowercased()
+            switch lang {
+            case "mermaid":
+                appendSimple(.mermaid(body))
+            case "svg":
+                appendSimple(.svg(body))
+            default:
+                appendSimple(.code(body))
+            }
+            code.removeAll()
+            codeFenceLanguage = nil
+            inCode = false
+        }
+
         var lineIndex = 0
         while lineIndex < lines.count {
             let line = lines[lineIndex]
@@ -2369,14 +2437,16 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
             let indentLevel = Self.indentLevel(for: line)
             if trimmed.hasPrefix("```") {
                 if inCode {
-                    appendSimple(.code(code.joined(separator: "\n")))
-                    code.removeAll()
-                    inCode = false
+                    appendClosedFence()
                 } else {
                     flushParagraph()
                     inCode = true
                     code.removeAll()
                     codeFenceIndent = line.prefix { $0 == " " || $0 == "\t" }.count
+                    // Info string: ```mermaid, ```svg title, etc.
+                    let info = trimmed.dropFirst(3).trimmingCharacters(in: .whitespaces)
+                    let token = info.split(whereSeparator: { $0.isWhitespace || $0 == "{" }).first.map(String.init)
+                    codeFenceLanguage = token.flatMap { $0.isEmpty ? nil : $0 }
                 }
                 lineIndex += 1
                 continue
@@ -2417,7 +2487,7 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
             }
         }
         if inCode {
-            appendSimple(.code(code.joined(separator: "\n")))
+            appendClosedFence()
         }
         flushParagraph()
         return blocks.isEmpty ? [.init(id: 0, kind: .paragraph(source))] : blocks
@@ -3140,6 +3210,10 @@ private enum TranscriptAttributedStringCache {
             case let .code(text):
                 flushText()
                 result.append(.code(codeString(text)))
+            case let .mermaid(text), let .svg(text):
+                // Attributed-string path cannot host WebKit; show as fenced code.
+                flushText()
+                result.append(.code(codeString(text)))
             case .thematicBreak:
                 if current.length > 0 {
                     current.append(NSAttributedString(string: "\n"))
@@ -3168,7 +3242,7 @@ private enum TranscriptAttributedStringCache {
             return numberedString(number: number, text: text, indentLevel: indentLevel)
         case let .table(table):
             return tableString(table)
-        case .quote, .code, .thematicBreak:
+        case .quote, .code, .mermaid, .svg, .thematicBreak:
             return NSAttributedString() // handled by the caller
         }
     }
