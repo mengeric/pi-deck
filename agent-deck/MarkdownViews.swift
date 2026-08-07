@@ -25,8 +25,7 @@ private enum NativeMarkdownFont {
 
 private enum MarkdownSemanticStyler {
     private static let presentationIntentKey = NSAttributedString.Key("NSInlinePresentationIntent")
-    private static let emphasis = 1
-    private static let strong = 2
+    /// Inline presentation intent bit for code (see NSInlinePresentationIntent).
     private static let code = 4
 
     static var headingColor: NSColor {
@@ -59,19 +58,22 @@ private enum MarkdownSemanticStyler {
         return NSFontManager.shared.convert(body, toHaveTrait: .italicFontMask)
     }
 
+    /// Applies semantic **colors** for inline code and links only.
+    ///
+    /// Bold (`strong`) and italic (`emphasis`) keep the system font traits from
+    /// AttributedString/Markdown — weight/italic only, **no recolor** — so body
+    /// text stays readable on dark bubbles (no amber “highlight” on `**…**`).
     static func applyInlineColors(to attributed: NSMutableAttributedString) {
         guard ThemeManager.shared.markdownHighlightingEnabled, attributed.length > 0 else { return }
         let fullRange = NSRange(location: 0, length: attributed.length)
         var updates: [(NSRange, NSColor, Bool)] = []
         attributed.enumerateAttributes(in: fullRange) { attributes, range, _ in
             let intent = (attributes[presentationIntentKey] as? NSNumber)?.intValue ?? 0
+            // Bold/italic keep weight from Markdown only — do not recolor.
             if intent & code != 0 {
                 updates.append((range, AppTheme.ns(AppTheme.markdownCode), false))
-            } else if intent & strong != 0 {
-                updates.append((range, AppTheme.ns(AppTheme.markdownStrong), false))
-            } else if intent & emphasis != 0 {
-                updates.append((range, AppTheme.ns(AppTheme.markdownEmphasis), false))
             } else if attributes[.link] != nil {
+                // Links stay tinted + underlined for affordance.
                 updates.append((range, AppTheme.ns(AppTheme.markdownLinkText), true))
             }
         }
