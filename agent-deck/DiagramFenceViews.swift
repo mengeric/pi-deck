@@ -25,7 +25,9 @@ enum DiagramSourceCodec {
     /// - Parameter raw: Raw fence body (may include hash comments).
     /// - Returns: `cacheKey` (last hash or content digest) and `diagramSource` for mermaid.js.
     static func mermaidKeyAndBody(from raw: String) -> (cacheKey: String, diagramSource: String) {
-        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let normalized = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
         var lastHash: String?
         var body: [String] = []
         for line in normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
@@ -38,7 +40,6 @@ enum DiagramSourceCodec {
             }
             body.append(line)
         }
-        // Drop leading/trailing blank lines so digest is stable.
         while body.first?.trimmingCharacters(in: .whitespaces).isEmpty == true { body.removeFirst() }
         while body.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { body.removeLast() }
         let diagramSource = body.joined(separator: "\n")
@@ -52,7 +53,6 @@ enum DiagramSourceCodec {
     /// - Returns: SVG markup suitable for WebKit display.
     static func normalizedSVG(from raw: String) -> String {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Allow accidental ```xml wrappers that only contain an <svg>…
         if !s.lowercased().contains("<svg"), s.contains("<SVG") {
             s = s.replacingOccurrences(of: "<SVG", with: "<svg").replacingOccurrences(of: "</SVG>", with: "</svg>")
         }
@@ -67,13 +67,22 @@ enum DiagramSourceCodec {
         let digest = SHA256.hash(data: Data(text.utf8))
         return digest.prefix(4).map { String(format: "%02x", $0) }.joined()
     }
+
+    static func jsStringLiteral(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "")
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+        return "'\(escaped)'"
+    }
 }
 
 // MARK: - Disk / memory SVG cache
 
 /// Caches rendered SVG strings keyed by diagram identity + theme.
-///
-/// Used so scrolling back over a mermaid block does not re-enter mermaid.js / JSC.
 @MainActor
 enum DiagramSVGCache {
     private static var memory: [String: String] = [:]
@@ -88,13 +97,6 @@ enum DiagramSVGCache {
         return dir
     }
 
-    /// Looks up a cached SVG document.
-    ///
-    /// - Parameters:
-    ///   - kind: `"mermaid"` or `"svg"`.
-    ///   - key: Hash / digest.
-    ///   - dark: Appearance bit.
-    /// - Returns: SVG markup when present.
     static func svg(kind: String, key: String, dark: Bool) -> String? {
         let id = cacheID(kind: kind, key: key, dark: dark)
         if let hit = memory[id] { return hit }
@@ -106,13 +108,6 @@ enum DiagramSVGCache {
         return text
     }
 
-    /// Persists SVG markup for a diagram key.
-    ///
-    /// - Parameters:
-    ///   - svg: Rendered SVG document.
-    ///   - kind: `"mermaid"` or `"svg"`.
-    ///   - key: Hash / digest.
-    ///   - dark: Appearance bit.
     static func store(svg: String, kind: String, key: String, dark: Bool) {
         let id = cacheID(kind: kind, key: key, dark: dark)
         storeMemory(id: id, svg: svg)
@@ -125,9 +120,7 @@ enum DiagramSVGCache {
     }
 
     private static func storeMemory(id: String, svg: String) {
-        if memory[id] == nil {
-            order.append(id)
-        }
+        if memory[id] == nil { order.append(id) }
         memory[id] = svg
         while order.count > memoryLimit {
             let drop = order.removeFirst()
@@ -136,247 +129,276 @@ enum DiagramSVGCache {
     }
 }
 
-// MARK: - Mermaid engine (lazy WK + bundled mermaid.min.js)
+// MARK: - Bundle helper
 
-/// Renders mermaid source to SVG via a single pooled `WKWebView`.
+enum MermaidBundle {
+    /// Locates bundled mermaid.min.js (folder sync may place it at Resources root or DiagramVendor/).
+    static func scriptURL() -> URL? {
+        Bundle.main.url(forResource: "mermaid.min", withExtension: "js", subdirectory: "DiagramVendor")
+            ?? Bundle.main.url(forResource: "mermaid.min", withExtension: "js")
+    }
+
+    static func scriptSource() -> String? {
+        guard let url = scriptURL() else { return nil }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }
+}
+
+// MARK: - In-place Mermaid block (visible WKWebView)
+
+/// Renders a ` ```mermaid ` fence **inside the transcript bubble**.
 ///
-/// The engine is created on first use and can be released with ``releaseEngine()``
-/// to drop JavaScriptCore after idle (same spirit as Highlightr Phase A).
-@MainActor
-final class MermaidDiagramEngine: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-    static let shared = MermaidDiagramEngine()
-
+/// Uses an on-screen `WKWebView` (not a headless offscreen engine) so WebKit
+/// always runs JS. Successful SVG is cached for instant re-entry.
+final class MermaidBlockView: NSView, WKNavigationDelegate, WKScriptMessageHandler {
     private var webView: WKWebView?
-    /// Keeps a hidden window so WK actually runs JS (off-hierarchy views can stall).
-    private var hostWindow: NSWindow?
-    private var pending: CheckedContinuation<String, Error>?
-    private var generation = 0
-    private var isDocumentReady = false
-    private var readyWaiters: [CheckedContinuation<Void, Never>] = []
+    private let status = NSTextField(labelWithString: "")
+    private let fallback = NSTextView()
+    private var heightConstraint: NSLayoutConstraint!
+    private var lastRaw = ""
+    private var pendingKey = ""
+    private var pendingDark = false
+    private var loadGeneration = 0
 
-    private override init() { super.init() }
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.masksToBounds = true
+        layer?.borderWidth = 1
+        layer?.borderColor = NSColor.separatorColor.cgColor
+        layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.35).cgColor
 
-    /// Whether the pooled WebView (and mermaid.js) is currently loaded.
-    var isEngineLoaded: Bool { webView != nil }
+        status.translatesAutoresizingMaskIntoConstraints = false
+        status.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        status.textColor = .secondaryLabelColor
+        status.lineBreakMode = .byTruncatingTail
 
-    /// Releases the WebView so JSC/WebKit can be reclaimed.
-    func releaseEngine() {
-        generation &+= 1
-        if let pending {
-            self.pending = nil
-            pending.resume(throwing: CancellationError())
-        }
-        readyWaiters.removeAll()
-        isDocumentReady = false
-        webView?.configuration.userContentController.removeScriptMessageHandler(forName: "mermaidDone")
-        webView?.navigationDelegate = nil
-        webView?.stopLoading()
-        webView = nil
-        hostWindow?.contentView = nil
-        hostWindow?.close()
-        hostWindow = nil
+        fallback.translatesAutoresizingMaskIntoConstraints = false
+        fallback.isEditable = false
+        fallback.isSelectable = true
+        fallback.drawsBackground = false
+        fallback.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        fallback.textColor = .labelColor
+        fallback.isHidden = true
+
+        addSubview(status)
+        addSubview(fallback)
+
+        heightConstraint = heightAnchor.constraint(equalToConstant: 140)
+        heightConstraint.priority = .defaultHigh
+
+        NSLayoutConstraint.activate([
+            status.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            status.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            status.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            fallback.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            fallback.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            fallback.topAnchor.constraint(equalTo: status.bottomAnchor, constant: 4),
+            fallback.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            heightConstraint
+        ])
+        setContentHuggingPriority(.defaultLow, for: .horizontal)
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
 
-    /// Renders mermaid source to an SVG document string.
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    deinit {
+        webView?.configuration.userContentController.removeScriptMessageHandler(forName: "deckMermaid")
+    }
+
+    /// Configures the block from a mermaid fence body.
     ///
-    /// - Parameters:
-    ///   - source: Clean mermaid body (no hash comments).
-    ///   - dark: Prefer dark theme tokens.
-    /// - Returns: SVG markup.
-    /// - Throws: When mermaid.js is missing, render fails, or the call is cancelled.
-    func renderSVG(source: String, dark: Bool) async throws -> String {
-        let (key, body) = DiagramSourceCodec.mermaidKeyAndBody(from: source)
+    /// - Parameter raw: Fence body (may include `%% mermaid-hash:` lines).
+    func configure(raw: String) {
+        guard raw != lastRaw else { return }
+        lastRaw = raw
+        loadGeneration &+= 1
+        let gen = loadGeneration
+
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let (key, body) = DiagramSourceCodec.mermaidKeyAndBody(from: raw)
+        pendingKey = key
+        pendingDark = dark
+
+        fallback.isHidden = true
+        status.isHidden = false
+        status.stringValue = LanguageStore.shared.t("diagram.mermaid")
+
         if let cached = DiagramSVGCache.svg(kind: "mermaid", key: key, dark: dark) {
-            return cached
+            showStaticSVG(cached, generation: gen)
+            return
         }
-        let engine = try ensureWebView()
-        try await waitUntilDocumentReady(timeoutSeconds: 4)
-        // Extra beat after didFinish — mermaid.min.js is large and may still parse.
-        try? await Task.sleep(nanoseconds: 50_000_000)
-        generation &+= 1
-        let token = generation
-        let svg: String = try await withCheckedThrowingContinuation { cont in
-            if let previous = pending {
-                pending = nil
-                previous.resume(throwing: CancellationError())
-            }
-            pending = cont
-            let payload = Self.jsStringLiteral(body)
-            let theme = dark ? "dark" : "default"
-            let js = """
-            (async function() {
-              try {
-                if (typeof mermaid === 'undefined') {
-                  window.webkit.messageHandlers.mermaidDone.postMessage({
-                    ok: false, error: 'mermaid global missing'
-                  });
-                  return;
-                }
-                mermaid.initialize({
-                  startOnLoad: false,
-                  securityLevel: 'strict',
-                  theme: '\(theme)',
-                  fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif'
-                });
-                const id = 'mmd_' + Date.now();
-                const out = await mermaid.render(id, \(payload));
-                window.webkit.messageHandlers.mermaidDone.postMessage({ ok: true, svg: out.svg });
-              } catch (e) {
-                window.webkit.messageHandlers.mermaidDone.postMessage({
-                  ok: false,
-                  error: String(e && e.message ? e.message : e)
-                });
-              }
-            })();
-            """
-            engine.evaluateJavaScript(js) { [weak self] _, error in
-                guard let self else { return }
-                if let error {
-                    Task { @MainActor in
-                        guard self.generation == token else { return }
-                        if let pending = self.pending {
-                            self.pending = nil
-                            pending.resume(throwing: error)
-                        }
-                    }
-                }
-            }
+
+        status.stringValue = LanguageStore.shared.t("diagram.rendering")
+        guard MermaidBundle.scriptSource() != nil else {
+            showFallback(body: body, error: LanguageStore.shared.t("diagram.mermaidMissing"))
+            return
         }
-        guard generation == token else { throw CancellationError() }
-        DiagramSVGCache.store(svg: svg, kind: "mermaid", key: key, dark: dark)
-        return svg
+        installWebViewIfNeeded()
+        guard let webView else { return }
+
+        let theme = dark ? "dark" : "default"
+        let payload = DiagramSourceCodec.jsStringLiteral(body)
+        // File URL base helps relative loads; script is inlined for reliability.
+        let js = MermaidBundle.scriptSource() ?? ""
+        let html = """
+        <!DOCTYPE html>
+        <html><head><meta charset="utf-8">
+        <style>
+          html,body{margin:0;padding:10px;background:transparent;color: \(dark ? "#e5e5e5" : "#1a1a1a");
+            font-family:-apple-system,BlinkMacSystemFont,sans-serif;}
+          #err{color:#f97316;font-size:12px;white-space:pre-wrap;}
+          .mermaid,.mermaid svg{max-width:100%;height:auto;}
+        </style>
+        <script>\(js)</script>
+        </head><body>
+        <div id="err"></div>
+        <div id="host" class="mermaid"></div>
+        <script>
+        (async function() {
+          try {
+            if (typeof mermaid === 'undefined') throw new Error('mermaid global missing');
+            mermaid.initialize({
+              startOnLoad: false,
+              securityLevel: 'loose',
+              theme: '\(theme)',
+              fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif'
+            });
+            const src = \(payload);
+            const id = 'm' + Date.now();
+            const out = await mermaid.render(id, src);
+            document.getElementById('host').innerHTML = out.svg;
+            const h = Math.ceil(Math.max(
+              document.body.scrollHeight,
+              document.documentElement.scrollHeight,
+              48
+            ));
+            window.webkit.messageHandlers.deckMermaid.postMessage({ ok: true, svg: out.svg, height: h });
+          } catch (e) {
+            const msg = String(e && e.message ? e.message : e);
+            document.getElementById('err').textContent = msg;
+            window.webkit.messageHandlers.deckMermaid.postMessage({ ok: false, error: msg, height: 80 });
+          }
+        })();
+        </script>
+        </body></html>
+        """
+        webView.isHidden = false
+        webView.loadHTMLString(html, baseURL: MermaidBundle.scriptURL()?.deletingLastPathComponent())
     }
 
-    private func ensureWebView() throws -> WKWebView {
-        if let webView { return webView }
-        guard let jsURL = Bundle.main.url(forResource: "mermaid.min", withExtension: "js", subdirectory: "DiagramVendor")
-                ?? Bundle.main.url(forResource: "mermaid.min", withExtension: "js") else {
-            throw DiagramRenderError.mermaidJSMissing
-        }
-        let js = try String(contentsOf: jsURL, encoding: .utf8)
+    private func installWebViewIfNeeded() {
+        if webView != nil { return }
         let controller = WKUserContentController()
-        controller.add(self, name: "mermaidDone")
+        controller.add(self, name: "deckMermaid")
         let config = WKWebViewConfiguration()
         config.userContentController = controller
         config.websiteDataStore = .nonPersistent()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
-        let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 32, height: 32), configuration: config)
+        let view = WKWebView(frame: .zero, configuration: config)
+        view.translatesAutoresizingMaskIntoConstraints = false
         view.navigationDelegate = self
         view.setValue(false, forKey: "drawsBackground")
-        // Must live in a window or JS evaluation / didFinish can stall on macOS.
-        let window = NSWindow(
-            contentRect: NSRect(x: -10_000, y: -10_000, width: 32, height: 32),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.isReleasedWhenClosed = false
-        window.alphaValue = 0
-        window.ignoresMouseEvents = true
-        window.contentView = view
-        window.orderBack(nil)
-        hostWindow = window
-        isDocumentReady = false
+        addSubview(view)
         webView = view
-        let html = """
-        <!DOCTYPE html><html><head><meta charset="utf-8">
-        <script>\(js)</script>
-        </head><body></body></html>
-        """
-        view.loadHTMLString(html, baseURL: jsURL.deletingLastPathComponent())
-        return view
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: trailingAnchor),
+            view.topAnchor.constraint(equalTo: status.bottomAnchor, constant: 2),
+            view.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
     }
 
-    /// Waits for the engine document to finish loading, or fails after `timeoutSeconds`.
-    private func waitUntilDocumentReady(timeoutSeconds: Double) async throws {
-        if isDocumentReady { return }
-        let timeoutNanos = UInt64(timeoutSeconds * 1_000_000_000)
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            if self.isDocumentReady {
-                cont.resume()
-                return
-            }
-            self.readyWaiters.append(cont)
-            DispatchQueue.main.asyncAfter(deadline: .now() + timeoutSeconds) { [weak self] in
-                guard let self, !self.isDocumentReady else { return }
-                // Unblock waiters so render can surface a clear error instead of hanging.
-                let waiters = self.readyWaiters
-                self.readyWaiters.removeAll()
-                for w in waiters { w.resume() }
-            }
+    private func showStaticSVG(_ svg: String, generation: Int) {
+        guard generation == loadGeneration else { return }
+        installWebViewIfNeeded()
+        webView?.isHidden = false
+        fallback.isHidden = true
+        status.stringValue = LanguageStore.shared.t("diagram.mermaid")
+        let html = """
+        <!DOCTYPE html><html><head><meta charset="utf-8">
+        <style>html,body{margin:0;padding:10px;background:transparent;overflow:hidden;}
+        svg{max-width:100%;height:auto;display:block;}</style></head>
+        <body>\(svg)</body></html>
+        """
+        webView?.loadHTMLString(html, baseURL: nil)
+        // Height refined in didFinish.
+    }
+
+    private func showFallback(body: String, error: String) {
+        webView?.isHidden = true
+        fallback.isHidden = false
+        status.stringValue = error
+        fallback.string = body
+        heightConstraint.constant = max(120, CGFloat(body.split(separator: "\n").count * 16 + 40))
+        invalidateIntrinsicContentSize()
+        notifyHeightChange()
+    }
+
+    private func applyHeight(_ raw: CGFloat) {
+        let h = min(max(raw + 28, 72), 720) // status row + padding
+        heightConstraint.constant = h
+        invalidateIntrinsicContentSize()
+        notifyHeightChange()
+    }
+
+    private func notifyHeightChange() {
+        // Nudge transcript row to re-measure after async diagram layout.
+        var view: NSView? = self
+        while let current = view {
+            current.invalidateIntrinsicContentSize()
+            current.needsLayout = true
+            view = current.superview
         }
-        if !isDocumentReady {
-            // Consume the sleep deadline without unused-variable noise.
-            _ = timeoutNanos
-            throw DiagramRenderError.mermaidFailed("Timed out loading mermaid engine")
-        }
+        window?.contentView?.needsLayout = true
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: heightConstraint.constant)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        isDocumentReady = true
-        let waiters = readyWaiters
-        readyWaiters.removeAll()
-        for w in waiters { w.resume() }
+        webView.evaluateJavaScript(
+            "Math.ceil(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, 48))"
+        ) { [weak self] result, _ in
+            let h = (result as? CGFloat) ?? (result as? Double).map { CGFloat($0) } ?? 120
+            DispatchQueue.main.async {
+                self?.applyHeight(h)
+            }
+        }
     }
 
-    /// - Note: First render after cold load waits for document ready.
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == "mermaidDone" else { return }
-        guard let pending else { return }
-        self.pending = nil
-        guard let body = message.body as? [String: Any] else {
-            pending.resume(throwing: DiagramRenderError.invalidBridgePayload)
-            return
-        }
+        guard message.name == "deckMermaid" else { return }
+        guard let body = message.body as? [String: Any] else { return }
+        let height = (body["height"] as? CGFloat)
+            ?? (body["height"] as? Double).map { CGFloat($0) }
+            ?? 120
         if body["ok"] as? Bool == true, let svg = body["svg"] as? String, !svg.isEmpty {
-            pending.resume(returning: svg)
+            DiagramSVGCache.store(svg: svg, kind: "mermaid", key: pendingKey, dark: pendingDark)
+            status.stringValue = LanguageStore.shared.t("diagram.mermaid")
+            applyHeight(height)
         } else {
-            let err = (body["error"] as? String) ?? "Mermaid render failed"
-            pending.resume(throwing: DiagramRenderError.mermaidFailed(err))
-        }
-    }
-
-    private static func jsStringLiteral(_ value: String) -> String {
-        let escaped = value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "'", with: "\\'")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "")
-            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
-            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
-        return "'\(escaped)'"
-    }
-}
-
-/// Errors from diagram rendering.
-enum DiagramRenderError: LocalizedError {
-    case mermaidJSMissing
-    case mermaidFailed(String)
-    case invalidBridgePayload
-    case emptySVG
-
-    var errorDescription: String? {
-        // Keep nonisolated (LocalizedError); UI maps keys via LanguageStore where shown.
-        switch self {
-        case .mermaidJSMissing:
-            return "mermaid.min.js is missing from the app bundle"
-        case .mermaidFailed(let message):
-            return message
-        case .invalidBridgePayload, .emptySVG:
-            return "Diagram render failed"
+            let err = (body["error"] as? String) ?? LanguageStore.shared.t("diagram.renderFailed")
+            let (_, diagramBody) = DiagramSourceCodec.mermaidKeyAndBody(from: lastRaw)
+            showFallback(body: diagramBody, error: err)
         }
     }
 }
 
-// MARK: - Native block views
+// MARK: - SVG fence block
 
-/// Displays static SVG markup in a non-interactive WebView (no mermaid.js).
-final class StaticSVGBlockView: NSView, WKNavigationDelegate {
+/// SVG fence block (raw SVG markup) shown via a lightweight WK surface.
+final class SVGFenceBlockView: NSView, WKNavigationDelegate {
     private let webView: WKWebView
+    private let fallback = NSTextView()
     private var heightConstraint: NSLayoutConstraint!
-    private var lastSVG: String = ""
+    private var lastRaw = ""
 
-    /// - Parameter preferredMinHeight: Initial height before content measures.
     override init(frame frameRect: NSRect) {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
@@ -387,15 +409,25 @@ final class StaticSVGBlockView: NSView, WKNavigationDelegate {
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
-        webView.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        fallback.translatesAutoresizingMaskIntoConstraints = false
+        fallback.isEditable = false
+        fallback.isSelectable = true
+        fallback.drawsBackground = false
+        fallback.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        fallback.isHidden = true
         addSubview(webView)
-        heightConstraint = heightAnchor.constraint(equalToConstant: 120)
+        addSubview(fallback)
+        heightConstraint = heightAnchor.constraint(equalToConstant: 100)
         heightConstraint.priority = .defaultHigh
         NSLayoutConstraint.activate([
             webView.leadingAnchor.constraint(equalTo: leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: trailingAnchor),
             webView.topAnchor.constraint(equalTo: topAnchor),
             webView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            fallback.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            fallback.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            fallback.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            fallback.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
             heightConstraint
         ])
         wantsLayer = true
@@ -408,32 +440,40 @@ final class StaticSVGBlockView: NSView, WKNavigationDelegate {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    /// Loads SVG markup and measures intrinsic height via JS.
-    ///
-    /// - Parameter svg: Full SVG document or fragment.
-    func setSVG(_ svg: String) {
-        let trimmed = svg.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed != lastSVG else { return }
-        lastSVG = trimmed
-        let html = """
-        <!DOCTYPE html><html><head><meta charset="utf-8">
-        <style>
-          html,body{margin:0;padding:8px;background:transparent;overflow:hidden;}
-          svg{max-width:100%;height:auto;display:block;}
-        </style></head><body>\(trimmed)</body></html>
-        """
-        webView.loadHTMLString(html, baseURL: nil)
+    /// - Parameter raw: Fence body for an `svg` code fence.
+    func configure(raw: String) {
+        guard raw != lastRaw else { return }
+        lastRaw = raw
+        let svg = DiagramSourceCodec.normalizedSVG(from: raw)
+        let key = DiagramSourceCodec.shortDigest(svg)
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        if svg.lowercased().contains("<svg") {
+            DiagramSVGCache.store(svg: svg, kind: "svg", key: key, dark: dark)
+            fallback.isHidden = true
+            webView.isHidden = false
+            let html = """
+            <!DOCTYPE html><html><head><meta charset="utf-8">
+            <style>html,body{margin:0;padding:10px;background:transparent;overflow:hidden;}
+            svg{max-width:100%;height:auto;display:block;}</style></head>
+            <body>\(svg)</body></html>
+            """
+            webView.loadHTMLString(html, baseURL: nil)
+        } else {
+            webView.isHidden = true
+            fallback.isHidden = false
+            fallback.string = raw
+            heightConstraint.constant = 120
+        }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         webView.evaluateJavaScript(
-            "Math.ceil(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight))"
+            "Math.ceil(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, 48))"
         ) { [weak self] result, _ in
-            guard let self else { return }
-            let h = (result as? CGFloat) ?? (result as? Double).map { CGFloat($0) } ?? 120
-            let clamped = min(max(h + 4, 48), 720)
+            let h = (result as? CGFloat) ?? (result as? Double).map { CGFloat($0) } ?? 100
             DispatchQueue.main.async {
-                self.heightConstraint.constant = clamped
+                guard let self else { return }
+                self.heightConstraint.constant = min(max(h + 8, 48), 720)
                 self.invalidateIntrinsicContentSize()
                 self.window?.contentView?.needsLayout = true
             }
@@ -445,162 +485,16 @@ final class StaticSVGBlockView: NSView, WKNavigationDelegate {
     }
 }
 
-/// Mermaid fence block: cache → engine → static SVG view; falls back to mono source.
-final class MermaidBlockView: NSView {
-    private let svgView = StaticSVGBlockView(frame: .zero)
-    private let fallback = NSTextView()
-    private let status = NSTextField(labelWithString: "")
-    private var workItem: DispatchWorkItem?
-    private var lastRaw = ""
+// MARK: - Optional engine release (memory)
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-        svgView.translatesAutoresizingMaskIntoConstraints = false
-        status.translatesAutoresizingMaskIntoConstraints = false
-        status.font = NSFont.systemFont(ofSize: 11)
-        status.textColor = .secondaryLabelColor
-        status.lineBreakMode = .byTruncatingTail
-
-        fallback.isEditable = false
-        fallback.isSelectable = true
-        fallback.drawsBackground = false
-        fallback.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        fallback.textColor = .labelColor
-        fallback.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(status)
-        addSubview(svgView)
-        addSubview(fallback)
-        fallback.isHidden = true
-        svgView.isHidden = true
-
-        NSLayoutConstraint.activate([
-            status.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            status.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            status.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-
-            svgView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            svgView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            svgView.topAnchor.constraint(equalTo: status.bottomAnchor, constant: 4),
-            svgView.bottomAnchor.constraint(equalTo: bottomAnchor),
-
-            fallback.leadingAnchor.constraint(equalTo: leadingAnchor),
-            fallback.trailingAnchor.constraint(equalTo: trailingAnchor),
-            fallback.topAnchor.constraint(equalTo: status.bottomAnchor, constant: 4),
-            fallback.bottomAnchor.constraint(equalTo: bottomAnchor),
-            fallback.heightAnchor.constraint(greaterThanOrEqualToConstant: 48)
-        ])
-        setContentHuggingPriority(.defaultLow, for: .horizontal)
-        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+/// Best-effort hook for future “idle release” of diagram WebKit processes.
+enum MermaidDiagramEngine {
+    @MainActor
+    static func releaseEngine() {
+        // In-place block webviews are owned by transcript cells; nothing global to drop.
+        // Kept so Review collapse / memory Phase A call sites stay source-compatible.
     }
 
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    /// Configures the block from a mermaid fence body.
-    ///
-    /// - Parameter raw: Fence body (may include `%% mermaid-hash:` lines).
-    func configure(raw: String) {
-        guard raw != lastRaw else { return }
-        lastRaw = raw
-        workItem?.cancel()
-        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let (key, body) = DiagramSourceCodec.mermaidKeyAndBody(from: raw)
-        status.stringValue = LanguageStore.shared.t("diagram.mermaid")
-        if let cached = DiagramSVGCache.svg(kind: "mermaid", key: key, dark: dark) {
-            showSVG(cached)
-            return
-        }
-        status.stringValue = LanguageStore.shared.t("diagram.rendering")
-        svgView.isHidden = true
-        fallback.isHidden = true
-        let item = DispatchWorkItem { [weak self] in
-            Task { @MainActor in
-                guard let self, self.lastRaw == raw else { return }
-                // Allow WK document + mermaid.min.js to finish loading on cold start.
-                try? await Task.sleep(nanoseconds: 80_000_000)
-                do {
-                    let svg = try await MermaidDiagramEngine.shared.renderSVG(source: raw, dark: dark)
-                    guard self.lastRaw == raw else { return }
-                    self.showSVG(svg)
-                } catch is CancellationError {
-                    return
-                } catch {
-                    guard self.lastRaw == raw else { return }
-                    self.showFallback(body: body, error: error.localizedDescription)
-                }
-            }
-        }
-        workItem = item
-        DispatchQueue.main.async(execute: item)
-    }
-
-    private func showSVG(_ svg: String) {
-        status.stringValue = LanguageStore.shared.t("diagram.mermaid")
-        fallback.isHidden = true
-        svgView.isHidden = false
-        svgView.setSVG(svg)
-    }
-
-    private func showFallback(body: String, error: String) {
-        status.stringValue = error
-        svgView.isHidden = true
-        fallback.isHidden = false
-        fallback.string = body
-    }
-}
-
-/// SVG fence block (raw SVG markup).
-final class SVGFenceBlockView: NSView {
-    private let svgView = StaticSVGBlockView(frame: .zero)
-    private let fallback = NSTextView()
-    private var lastRaw = ""
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-        svgView.translatesAutoresizingMaskIntoConstraints = false
-        fallback.translatesAutoresizingMaskIntoConstraints = false
-        fallback.isEditable = false
-        fallback.isSelectable = true
-        fallback.drawsBackground = false
-        fallback.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        addSubview(svgView)
-        addSubview(fallback)
-        fallback.isHidden = true
-        NSLayoutConstraint.activate([
-            svgView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            svgView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            svgView.topAnchor.constraint(equalTo: topAnchor),
-            svgView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            fallback.leadingAnchor.constraint(equalTo: leadingAnchor),
-            fallback.trailingAnchor.constraint(equalTo: trailingAnchor),
-            fallback.topAnchor.constraint(equalTo: topAnchor),
-            fallback.bottomAnchor.constraint(equalTo: bottomAnchor),
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 48)
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    /// - Parameter raw: Fence body for ` ```svg `.
-    func configure(raw: String) {
-        guard raw != lastRaw else { return }
-        lastRaw = raw
-        let svg = DiagramSourceCodec.normalizedSVG(from: raw)
-        let key = DiagramSourceCodec.shortDigest(svg)
-        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        if svg.lowercased().contains("<svg") {
-            DiagramSVGCache.store(svg: svg, kind: "svg", key: key, dark: dark)
-            fallback.isHidden = true
-            svgView.isHidden = false
-            svgView.setSVG(svg)
-        } else {
-            svgView.isHidden = true
-            fallback.isHidden = false
-            fallback.string = raw
-        }
-    }
+    @MainActor
+    static var isEngineLoaded: Bool { false }
 }

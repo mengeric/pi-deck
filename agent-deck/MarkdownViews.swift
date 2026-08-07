@@ -2380,7 +2380,11 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
     let kind: Kind
 
     static func parse(_ source: String) -> [MarkdownBlock] {
-        let lines = source.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let lines = source
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
         var blocks: [MarkdownBlock] = []
         var paragraph: [String] = []
         var code: [String] = []
@@ -2447,9 +2451,13 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
                     code.removeAll()
                     codeFenceIndent = line.prefix { $0 == " " || $0 == "\t" }.count
                     // Info string: ```mermaid, ```svg title, etc.
-                    let info = trimmed.dropFirst(3).trimmingCharacters(in: .whitespaces)
+                    let info = trimmed.dropFirst(3).trimmingCharacters(in: .whitespacesAndNewlines)
                     let token = info.split(whereSeparator: { $0.isWhitespace || $0 == "{" }).first.map(String.init)
-                    codeFenceLanguage = token.flatMap { $0.isEmpty ? nil : $0 }
+                    // Keep only letter/digit/dash so `mermaid` / `mmd` survive odd trailing junk.
+                    let cleaned = token?
+                        .lowercased()
+                        .filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+                    codeFenceLanguage = cleaned.flatMap { $0.isEmpty ? nil : $0 }
                 }
                 lineIndex += 1
                 continue
