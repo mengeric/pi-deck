@@ -6,14 +6,8 @@ import WebKit
 
 /// Parses fenced diagram bodies used in agent transcripts and markdown cards.
 ///
-/// Supports optional cache fingerprints:
-/// ```text
-/// %% mermaid-hash: e0739422
-/// flowchart LR
-///   A --> B
-/// ```
-/// When multiple hash lines exist, **the last one wins**. All hash lines are
-/// stripped before rendering.
+/// When multiple `%% mermaid-hash:` lines exist, **the last one wins**. All hash
+/// lines are stripped before rendering.
 enum DiagramSourceCodec {
     private static let hashLine = try! NSRegularExpression(
         pattern: #"^\s*%%\s*mermaid-hash:\s*([0-9a-fA-F]+)\s*$"#,
@@ -47,7 +41,7 @@ enum DiagramSourceCodec {
         return (cacheKey, diagramSource)
     }
 
-    /// Normalizes an SVG fence body (trim, ensure root element when possible).
+    /// Normalizes an SVG fence body.
     ///
     /// - Parameter raw: Fence body labeled `svg`.
     /// - Returns: SVG markup suitable for WebKit display.
@@ -132,7 +126,7 @@ enum DiagramSVGCache {
 // MARK: - Bundle helper
 
 enum MermaidBundle {
-    /// Locates bundled mermaid.min.js (folder sync may place it at Resources root or DiagramVendor/).
+    /// Locates bundled mermaid.min.js.
     static func scriptURL() -> URL? {
         Bundle.main.url(forResource: "mermaid.min", withExtension: "js", subdirectory: "DiagramVendor")
             ?? Bundle.main.url(forResource: "mermaid.min", withExtension: "js")
@@ -144,21 +138,187 @@ enum MermaidBundle {
     }
 }
 
-// MARK: - In-place Mermaid block (visible WKWebView)
+// MARK: - Click-to-zoom panel
 
-/// Renders a ` ```mermaid ` fence **inside the transcript bubble**.
-///
-/// Uses an on-screen `WKWebView` (not a headless offscreen engine) so WebKit
-/// always runs JS. Successful SVG is cached for instant re-entry.
+/// Floating panel that shows a diagram full-size (click mermaid/svg block to open).
+@MainActor
+enum DiagramZoomPresenter {
+    private static var retained: DiagramZoomWindowController?
+
+    /// Presents SVG (preferred) or re-renders mermaid source in a large panel.
+    ///
+    /// - Parameters:
+    ///   - svg: Cached SVG markup when available.
+    ///   - mermaidSource: Clean mermaid body for live re-render if `svg` is nil.
+    ///   - title: Panel title.
+    ///   - dark: Appearance bit.
+    ///   - anchor: View to center relative to (usually the diagram block).
+    static func present(
+        svg: String?,
+        mermaidSource: String? = nil,
+        title: String,
+        dark: Bool,
+        relativeTo anchor: NSView
+    ) {
+        let controller = DiagramZoomWindowController(
+            svg: svg,
+            mermaidSource: mermaidSource,
+            title: title,
+            dark: dark
+        )
+        retained = controller
+        controller.onClose = { retained = nil }
+        controller.show(relativeTo: anchor)
+    }
+}
+
+/// Window controller for the diagram zoom panel.
+@MainActor
+final class DiagramZoomWindowController: NSObject, NSWindowDelegate {
+    var onClose: (() -> Void)?
+    private let panel: NSPanel
+    private let webView: WKWebView
+    private let svg: String?
+    private let mermaidSource: String?
+    private let dark: Bool
+
+    /// - Parameters:
+    ///   - svg: Pre-rendered SVG when available.
+    ///   - mermaidSource: Fallback mermaid source to render inside the panel.
+    ///   - title: Window title.
+    ///   - dark: Dark appearance for theme tokens.
+    init(svg: String?, mermaidSource: String?, title: String, dark: Bool) {
+        self.svg = svg
+        self.mermaidSource = mermaidSource
+        self.dark = dark
+
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
+        let size = NSSize(
+            width: min(max(screen.width * 0.85, 640), screen.width - 40),
+            height: min(max(screen.height * 0.8, 480), screen.height - 40)
+        )
+        panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = title
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.backgroundColor = dark ? NSColor(calibratedWhite: 0.12, alpha: 1) : .windowBackgroundColor
+
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        config.defaultWebpagePreferences.allowsContentJavaScript = true
+        webView = WKWebView(frame: .zero, configuration: config)
+        webView.setValue(false, forKey: "drawsBackground")
+        webView.translatesAutoresizingMaskIntoConstraints = false
+
+        let root = NSView(frame: .zero)
+        root.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: root.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: root.bottomAnchor)
+        ])
+        panel.contentView = root
+        super.init()
+        panel.delegate = self
+        loadContent()
+    }
+
+    /// Shows the panel centered on the same screen as `anchor`.
+    ///
+    /// - Parameter anchor: Source diagram view.
+    func show(relativeTo anchor: NSView) {
+        if let screen = anchor.window?.screen ?? NSScreen.main {
+            let vf = screen.visibleFrame
+            let size = panel.frame.size
+            let origin = NSPoint(
+                x: vf.midX - size.width / 2,
+                y: vf.midY - size.height / 2
+            )
+            panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        }
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onClose?()
+    }
+
+    private func loadContent() {
+        if let svg, !svg.isEmpty {
+            webView.loadHTMLString(Self.htmlDocument(bodyInner: svg, dark: dark, padded: true), baseURL: nil)
+            return
+        }
+        if let mermaidSource, let js = MermaidBundle.scriptSource() {
+            let theme = dark ? "dark" : "default"
+            let payload = DiagramSourceCodec.jsStringLiteral(mermaidSource)
+            let html = """
+            <!DOCTYPE html><html><head><meta charset="utf-8">
+            <style>
+              html,body{margin:0;padding:24px;background:\(dark ? "#1e1e1e" : "#fafafa");
+                color:\(dark ? "#e5e5e5" : "#1a1a1a");}
+              svg{max-width:100%;height:auto;display:block;margin:0 auto;}
+            </style>
+            <script>\(js)</script>
+            </head><body><div id="host"></div>
+            <script>
+            (async function(){
+              mermaid.initialize({startOnLoad:false,securityLevel:'loose',theme:'\(theme)',
+                flowchart:{useMaxWidth:true,htmlLabels:true},
+                sequence:{useMaxWidth:true}});
+              const out = await mermaid.render('z'+Date.now(), \(payload));
+              document.getElementById('host').innerHTML = out.svg;
+              document.querySelectorAll('svg').forEach(s=>{
+                s.style.width='100%'; s.style.maxWidth='100%'; s.style.height='auto';
+                s.removeAttribute('height');
+              });
+            })();
+            </script></body></html>
+            """
+            webView.loadHTMLString(html, baseURL: MermaidBundle.scriptURL()?.deletingLastPathComponent())
+            return
+        }
+        webView.loadHTMLString(Self.htmlDocument(bodyInner: "<p>No diagram</p>", dark: dark, padded: true), baseURL: nil)
+    }
+
+    private static func htmlDocument(bodyInner: String, dark: Bool, padded: Bool) -> String {
+        let pad = padded ? "24px" : "0"
+        return """
+        <!DOCTYPE html><html><head><meta charset="utf-8">
+        <style>
+          html,body{margin:0;padding:\(pad);background:\(dark ? "#1e1e1e" : "#fafafa");}
+          svg{max-width:100%;height:auto;display:block;margin:0 auto;}
+        </style></head><body>\(bodyInner)</body></html>
+        """
+    }
+}
+
+// MARK: - In-place Mermaid block
+
+/// Renders a mermaid fence inside the transcript; click or ↗ to zoom.
 final class MermaidBlockView: NSView, WKNavigationDelegate, WKScriptMessageHandler {
     private var webView: WKWebView?
+    private let header = NSView()
     private let status = NSTextField(labelWithString: "")
+    private let zoomButton = NSButton()
     private let fallback = NSTextView()
     private var heightConstraint: NSLayoutConstraint!
     private var lastRaw = ""
     private var pendingKey = ""
     private var pendingDark = false
     private var loadGeneration = 0
+    /// Last successful SVG for click-to-zoom without re-render.
+    private var lastSVG: String?
+    private var lastDiagramBody = ""
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -170,10 +330,31 @@ final class MermaidBlockView: NSView, WKNavigationDelegate, WKScriptMessageHandl
         layer?.borderColor = NSColor.separatorColor.cgColor
         layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.35).cgColor
 
+        // Stack gravityAreas hugs intrinsic width — keep hugging minimal so the
+        // block stretches to the markdown column (avoids tiny right-rail cards).
+        setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+        setContentCompressionResistancePriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+
+        header.translatesAutoresizingMaskIntoConstraints = false
         status.translatesAutoresizingMaskIntoConstraints = false
         status.font = NSFont.systemFont(ofSize: 11, weight: .medium)
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingTail
+        status.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        zoomButton.translatesAutoresizingMaskIntoConstraints = false
+        zoomButton.isBordered = false
+        zoomButton.bezelStyle = .inline
+        zoomButton.imagePosition = .imageOnly
+        zoomButton.focusRingType = .none
+        zoomButton.contentTintColor = .secondaryLabelColor
+        let cfg = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+        zoomButton.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: "Zoom")?
+            .withSymbolConfiguration(cfg)
+        zoomButton.toolTip = LanguageStore.shared.t("diagram.zoomHint")
+        zoomButton.target = self
+        zoomButton.action = #selector(zoomTapped)
+        zoomButton.setContentHuggingPriority(.required, for: .horizontal)
 
         fallback.translatesAutoresizingMaskIntoConstraints = false
         fallback.isEditable = false
@@ -183,24 +364,38 @@ final class MermaidBlockView: NSView, WKNavigationDelegate, WKScriptMessageHandl
         fallback.textColor = .labelColor
         fallback.isHidden = true
 
-        addSubview(status)
+        header.addSubview(status)
+        header.addSubview(zoomButton)
+        addSubview(header)
         addSubview(fallback)
 
-        heightConstraint = heightAnchor.constraint(equalToConstant: 140)
+        heightConstraint = heightAnchor.constraint(equalToConstant: 200)
         heightConstraint.priority = .defaultHigh
 
         NSLayoutConstraint.activate([
-            status.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            status.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            status.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            header.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            header.heightAnchor.constraint(equalToConstant: 18),
+
+            status.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            status.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            status.trailingAnchor.constraint(lessThanOrEqualTo: zoomButton.leadingAnchor, constant: -8),
+
+            zoomButton.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            zoomButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            zoomButton.widthAnchor.constraint(equalToConstant: 20),
+            zoomButton.heightAnchor.constraint(equalToConstant: 18),
+
             fallback.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             fallback.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            fallback.topAnchor.constraint(equalTo: status.bottomAnchor, constant: 4),
+            fallback.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
             fallback.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
             heightConstraint
         ])
-        setContentHuggingPriority(.defaultLow, for: .horizontal)
-        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let click = NSClickGestureRecognizer(target: self, action: #selector(zoomTapped))
+        addGestureRecognizer(click)
     }
 
     @available(*, unavailable)
@@ -208,6 +403,15 @@ final class MermaidBlockView: NSView, WKNavigationDelegate, WKScriptMessageHandl
 
     deinit {
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "deckMermaid")
+    }
+
+    override var intrinsicContentSize: NSSize {
+        // Width must stay flexible so NSStackView (.gravityAreas) can stretch us.
+        NSSize(width: NSView.noIntrinsicMetric, height: heightConstraint.constant)
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
     }
 
     /// Configures the block from a mermaid fence body.
@@ -218,17 +422,20 @@ final class MermaidBlockView: NSView, WKNavigationDelegate, WKScriptMessageHandl
         lastRaw = raw
         loadGeneration &+= 1
         let gen = loadGeneration
+        lastSVG = nil
 
         let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let (key, body) = DiagramSourceCodec.mermaidKeyAndBody(from: raw)
         pendingKey = key
         pendingDark = dark
+        lastDiagramBody = body
 
         fallback.isHidden = true
-        status.isHidden = false
         status.stringValue = LanguageStore.shared.t("diagram.mermaid")
+        zoomButton.isEnabled = true
 
         if let cached = DiagramSVGCache.svg(kind: "mermaid", key: key, dark: dark) {
+            lastSVG = cached
             showStaticSVG(cached, generation: gen)
             return
         }
@@ -243,21 +450,25 @@ final class MermaidBlockView: NSView, WKNavigationDelegate, WKScriptMessageHandl
 
         let theme = dark ? "dark" : "default"
         let payload = DiagramSourceCodec.jsStringLiteral(body)
-        // File URL base helps relative loads; script is inlined for reliability.
         let js = MermaidBundle.scriptSource() ?? ""
+        // useMaxWidth so sequence/flowchart fill the bubble instead of a tiny fixed SVG.
         let html = """
         <!DOCTYPE html>
         <html><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-          html,body{margin:0;padding:10px;background:transparent;color: \(dark ? "#e5e5e5" : "#1a1a1a");
-            font-family:-apple-system,BlinkMacSystemFont,sans-serif;}
+          html,body{margin:0;padding:8px 10px 12px;background:transparent;
+            color:\(dark ? "#e5e5e5" : "#1a1a1a");
+            font-family:-apple-system,BlinkMacSystemFont,sans-serif;
+            overflow:hidden;}
           #err{color:#f97316;font-size:12px;white-space:pre-wrap;}
-          .mermaid,.mermaid svg{max-width:100%;height:auto;}
+          #host{width:100%;}
+          #host svg{width:100% !important;max-width:100% !important;height:auto !important;display:block;}
         </style>
         <script>\(js)</script>
         </head><body>
         <div id="err"></div>
-        <div id="host" class="mermaid"></div>
+        <div id="host"></div>
         <script>
         (async function() {
           try {
@@ -266,16 +477,32 @@ final class MermaidBlockView: NSView, WKNavigationDelegate, WKScriptMessageHandl
               startOnLoad: false,
               securityLevel: 'loose',
               theme: '\(theme)',
-              fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif'
+              fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+              flowchart: { useMaxWidth: true, htmlLabels: true },
+              sequence: { useMaxWidth: true },
+              er: { useMaxWidth: true },
+              gantt: { useMaxWidth: true }
             });
             const src = \(payload);
             const id = 'm' + Date.now();
             const out = await mermaid.render(id, src);
-            document.getElementById('host').innerHTML = out.svg;
+            const host = document.getElementById('host');
+            host.innerHTML = out.svg;
+            document.querySelectorAll('#host svg').forEach(s => {
+              s.style.width = '100%';
+              s.style.maxWidth = '100%';
+              s.style.height = 'auto';
+              s.removeAttribute('height');
+              if (!s.getAttribute('viewBox') && s.getAttribute('width') && s.getAttribute('height')) {
+                /* keep viewBox if mermaid provided one */
+              }
+              s.setAttribute('width', '100%');
+            });
             const h = Math.ceil(Math.max(
               document.body.scrollHeight,
               document.documentElement.scrollHeight,
-              48
+              host.scrollHeight,
+              64
             ));
             window.webkit.messageHandlers.deckMermaid.postMessage({ ok: true, svg: out.svg, height: h });
           } catch (e) {
@@ -291,6 +518,17 @@ final class MermaidBlockView: NSView, WKNavigationDelegate, WKScriptMessageHandl
         webView.loadHTMLString(html, baseURL: MermaidBundle.scriptURL()?.deletingLastPathComponent())
     }
 
+    @objc private func zoomTapped() {
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        DiagramZoomPresenter.present(
+            svg: lastSVG,
+            mermaidSource: lastDiagramBody.isEmpty ? nil : lastDiagramBody,
+            title: LanguageStore.shared.t("diagram.zoomTitle"),
+            dark: dark,
+            relativeTo: self
+        )
+    }
+
     private func installWebViewIfNeeded() {
         if webView != nil { return }
         let controller = WKUserContentController()
@@ -303,12 +541,14 @@ final class MermaidBlockView: NSView, WKNavigationDelegate, WKScriptMessageHandl
         view.translatesAutoresizingMaskIntoConstraints = false
         view.navigationDelegate = self
         view.setValue(false, forKey: "drawsBackground")
+        view.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+        view.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(1), for: .horizontal)
         addSubview(view)
         webView = view
         NSLayoutConstraint.activate([
             view.leadingAnchor.constraint(equalTo: leadingAnchor),
             view.trailingAnchor.constraint(equalTo: trailingAnchor),
-            view.topAnchor.constraint(equalTo: status.bottomAnchor, constant: 2),
+            view.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2),
             view.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
     }
@@ -319,14 +559,17 @@ final class MermaidBlockView: NSView, WKNavigationDelegate, WKScriptMessageHandl
         webView?.isHidden = false
         fallback.isHidden = true
         status.stringValue = LanguageStore.shared.t("diagram.mermaid")
+        let dark = pendingDark
         let html = """
         <!DOCTYPE html><html><head><meta charset="utf-8">
-        <style>html,body{margin:0;padding:10px;background:transparent;overflow:hidden;}
-        svg{max-width:100%;height:auto;display:block;}</style></head>
+        <style>
+          html,body{margin:0;padding:8px 10px 12px;background:transparent;overflow:hidden;}
+          svg{width:100% !important;max-width:100% !important;height:auto !important;display:block;}
+        </style></head>
         <body>\(svg)</body></html>
         """
+        _ = dark
         webView?.loadHTMLString(html, baseURL: nil)
-        // Height refined in didFinish.
     }
 
     private func showFallback(body: String, error: String) {
@@ -334,20 +577,20 @@ final class MermaidBlockView: NSView, WKNavigationDelegate, WKScriptMessageHandl
         fallback.isHidden = false
         status.stringValue = error
         fallback.string = body
-        heightConstraint.constant = max(120, CGFloat(body.split(separator: "\n").count * 16 + 40))
+        heightConstraint.constant = max(120, CGFloat(body.split(separator: "\n").count * 16 + 48))
         invalidateIntrinsicContentSize()
         notifyHeightChange()
     }
 
     private func applyHeight(_ raw: CGFloat) {
-        let h = min(max(raw + 28, 72), 720) // status row + padding
+        // Prefer a readable in-bubble height; user can zoom for full detail.
+        let h = min(max(raw + 28, 120), 480)
         heightConstraint.constant = h
         invalidateIntrinsicContentSize()
         notifyHeightChange()
     }
 
     private func notifyHeightChange() {
-        // Nudge transcript row to re-measure after async diagram layout.
         var view: NSView? = self
         while let current = view {
             current.invalidateIntrinsicContentSize()
@@ -357,18 +600,19 @@ final class MermaidBlockView: NSView, WKNavigationDelegate, WKScriptMessageHandl
         window?.contentView?.needsLayout = true
     }
 
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: heightConstraint.constant)
-    }
-
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         webView.evaluateJavaScript(
-            "Math.ceil(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, 48))"
+            """
+            (function(){
+              document.querySelectorAll('svg').forEach(s=>{
+                s.style.width='100%'; s.style.maxWidth='100%'; s.style.height='auto';
+              });
+              return Math.ceil(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, 64));
+            })()
+            """
         ) { [weak self] result, _ in
-            let h = (result as? CGFloat) ?? (result as? Double).map { CGFloat($0) } ?? 120
-            DispatchQueue.main.async {
-                self?.applyHeight(h)
-            }
+            let h = (result as? CGFloat) ?? (result as? Double).map { CGFloat($0) } ?? 160
+            DispatchQueue.main.async { self?.applyHeight(h) }
         }
     }
 
@@ -377,27 +621,31 @@ final class MermaidBlockView: NSView, WKNavigationDelegate, WKScriptMessageHandl
         guard let body = message.body as? [String: Any] else { return }
         let height = (body["height"] as? CGFloat)
             ?? (body["height"] as? Double).map { CGFloat($0) }
-            ?? 120
+            ?? 160
         if body["ok"] as? Bool == true, let svg = body["svg"] as? String, !svg.isEmpty {
+            lastSVG = svg
             DiagramSVGCache.store(svg: svg, kind: "mermaid", key: pendingKey, dark: pendingDark)
             status.stringValue = LanguageStore.shared.t("diagram.mermaid")
             applyHeight(height)
         } else {
             let err = (body["error"] as? String) ?? LanguageStore.shared.t("diagram.renderFailed")
-            let (_, diagramBody) = DiagramSourceCodec.mermaidKeyAndBody(from: lastRaw)
-            showFallback(body: diagramBody, error: err)
+            showFallback(body: lastDiagramBody, error: err)
         }
     }
 }
 
 // MARK: - SVG fence block
 
-/// SVG fence block (raw SVG markup) shown via a lightweight WK surface.
+/// SVG fence with full-width layout and click-to-zoom.
 final class SVGFenceBlockView: NSView, WKNavigationDelegate {
     private let webView: WKWebView
+    private let header = NSView()
+    private let status = NSTextField(labelWithString: "")
+    private let zoomButton = NSButton()
     private let fallback = NSTextView()
     private var heightConstraint: NSLayoutConstraint!
     private var lastRaw = ""
+    private var lastSVG: String?
 
     override init(frame frameRect: NSRect) {
         let config = WKWebViewConfiguration()
@@ -406,27 +654,66 @@ final class SVGFenceBlockView: NSView, WKNavigationDelegate {
         webView = WKWebView(frame: .zero, configuration: config)
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
+        setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+        setContentCompressionResistancePriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
+        webView.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+
+        header.translatesAutoresizingMaskIntoConstraints = false
+        status.translatesAutoresizingMaskIntoConstraints = false
+        status.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        status.textColor = .secondaryLabelColor
+        status.stringValue = "SVG"
+
+        zoomButton.translatesAutoresizingMaskIntoConstraints = false
+        zoomButton.isBordered = false
+        zoomButton.bezelStyle = .inline
+        zoomButton.imagePosition = .imageOnly
+        zoomButton.focusRingType = .none
+        zoomButton.contentTintColor = .secondaryLabelColor
+        let cfg = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+        zoomButton.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: "Zoom")?
+            .withSymbolConfiguration(cfg)
+        zoomButton.toolTip = LanguageStore.shared.t("diagram.zoomHint")
+        zoomButton.target = self
+        zoomButton.action = #selector(zoomTapped)
+
         fallback.translatesAutoresizingMaskIntoConstraints = false
         fallback.isEditable = false
         fallback.isSelectable = true
         fallback.drawsBackground = false
         fallback.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         fallback.isHidden = true
+
+        header.addSubview(status)
+        header.addSubview(zoomButton)
+        addSubview(header)
         addSubview(webView)
         addSubview(fallback)
-        heightConstraint = heightAnchor.constraint(equalToConstant: 100)
+
+        heightConstraint = heightAnchor.constraint(equalToConstant: 160)
         heightConstraint.priority = .defaultHigh
         NSLayoutConstraint.activate([
+            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            header.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            header.heightAnchor.constraint(equalToConstant: 18),
+            status.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            status.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            zoomButton.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            zoomButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            zoomButton.widthAnchor.constraint(equalToConstant: 20),
+            zoomButton.heightAnchor.constraint(equalToConstant: 18),
             webView.leadingAnchor.constraint(equalTo: leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            webView.topAnchor.constraint(equalTo: topAnchor),
+            webView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2),
             webView.bottomAnchor.constraint(equalTo: bottomAnchor),
             fallback.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             fallback.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            fallback.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            fallback.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
             fallback.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
             heightConstraint
         ])
@@ -435,10 +722,21 @@ final class SVGFenceBlockView: NSView, WKNavigationDelegate {
         layer?.masksToBounds = true
         layer?.borderWidth = 1
         layer?.borderColor = NSColor.separatorColor.cgColor
+
+        let click = NSClickGestureRecognizer(target: self, action: #selector(zoomTapped))
+        addGestureRecognizer(click)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: heightConstraint.constant)
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
 
     /// - Parameter raw: Fence body for an `svg` code fence.
     func configure(raw: String) {
@@ -448,17 +746,21 @@ final class SVGFenceBlockView: NSView, WKNavigationDelegate {
         let key = DiagramSourceCodec.shortDigest(svg)
         let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         if svg.lowercased().contains("<svg") {
+            lastSVG = svg
             DiagramSVGCache.store(svg: svg, kind: "svg", key: key, dark: dark)
             fallback.isHidden = true
             webView.isHidden = false
             let html = """
             <!DOCTYPE html><html><head><meta charset="utf-8">
-            <style>html,body{margin:0;padding:10px;background:transparent;overflow:hidden;}
-            svg{max-width:100%;height:auto;display:block;}</style></head>
+            <style>
+              html,body{margin:0;padding:8px 10px;background:transparent;overflow:hidden;}
+              svg{width:100% !important;max-width:100% !important;height:auto !important;display:block;}
+            </style></head>
             <body>\(svg)</body></html>
             """
             webView.loadHTMLString(html, baseURL: nil)
         } else {
+            lastSVG = nil
             webView.isHidden = true
             fallback.isHidden = false
             fallback.string = raw
@@ -466,34 +768,37 @@ final class SVGFenceBlockView: NSView, WKNavigationDelegate {
         }
     }
 
+    @objc private func zoomTapped() {
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        DiagramZoomPresenter.present(
+            svg: lastSVG,
+            mermaidSource: nil,
+            title: "SVG",
+            dark: dark,
+            relativeTo: self
+        )
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         webView.evaluateJavaScript(
-            "Math.ceil(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, 48))"
+            "Math.ceil(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, 64))"
         ) { [weak self] result, _ in
-            let h = (result as? CGFloat) ?? (result as? Double).map { CGFloat($0) } ?? 100
+            let h = (result as? CGFloat) ?? (result as? Double).map { CGFloat($0) } ?? 120
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.heightConstraint.constant = min(max(h + 8, 48), 720)
+                self.heightConstraint.constant = min(max(h + 28, 80), 480)
                 self.invalidateIntrinsicContentSize()
                 self.window?.contentView?.needsLayout = true
             }
         }
     }
-
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: heightConstraint.constant)
-    }
 }
 
-// MARK: - Optional engine release (memory)
+// MARK: - Compatibility hook
 
-/// Best-effort hook for future “idle release” of diagram WebKit processes.
 enum MermaidDiagramEngine {
     @MainActor
-    static func releaseEngine() {
-        // In-place block webviews are owned by transcript cells; nothing global to drop.
-        // Kept so Review collapse / memory Phase A call sites stay source-compatible.
-    }
+    static func releaseEngine() {}
 
     @MainActor
     static var isEngineLoaded: Bool { false }

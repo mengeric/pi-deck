@@ -2436,3 +2436,5 @@
 "diagram.rendering" = "Rendering diagram…";
 "diagram.renderFailed" = "Diagram render failed";
 "diagram.mermaidMissing" = "mermaid.min.js is missing from the app bundle";
+"diagram.zoomHint" = "Click to enlarge";
+"diagram.zoomTitle" = "Mermaid diagram";

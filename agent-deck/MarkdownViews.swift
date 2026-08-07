@@ -1243,18 +1243,26 @@ final class NativeMarkdownTextContainer: NSView {
         }
     }
 
-    /// Mermaid diagram fence → lazy mermaid.js render into SVG.
+    /// Mermaid diagram fence → lazy mermaid.js render into SVG (full column width).
     private static func mermaidBlock(_ source: String) -> NSView {
         let view = MermaidBlockView(frame: .zero)
         view.configure(raw: source)
-        return paddedBlock(view, padding: NSEdgeInsets(top: 4, left: 0, bottom: 4, right: 0))
+        // Prefer stretching with the markdown stack over hugging SVG intrinsic width
+        // (which previously left a tiny card on the trailing edge of the bubble).
+        let wrap = paddedBlock(view, padding: NSEdgeInsets(top: 4, left: 0, bottom: 4, right: 0))
+        wrap.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+        wrap.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+        return wrap
     }
 
-    /// Raw SVG fence → static SVG web surface.
+    /// Raw SVG fence → static SVG web surface (full column width + click zoom).
     private static func svgFenceBlock(_ source: String) -> NSView {
         let view = SVGFenceBlockView(frame: .zero)
         view.configure(raw: source)
-        return paddedBlock(view, padding: NSEdgeInsets(top: 4, left: 0, bottom: 4, right: 0))
+        let wrap = paddedBlock(view, padding: NSEdgeInsets(top: 4, left: 0, bottom: 4, right: 0))
+        wrap.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+        wrap.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+        return wrap
     }
 
     /// Thin full-width hairline for CommonMark thematic breaks (`---`).

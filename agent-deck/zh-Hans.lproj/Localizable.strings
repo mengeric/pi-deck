@@ -2435,3 +2435,5 @@
 "diagram.rendering" = "正在渲染图…";
 "diagram.renderFailed" = "图渲染失败";
 "diagram.mermaidMissing" = "缺少 mermaid.min.js，无法渲染流程图";
+"diagram.zoomHint" = "点击放大";
+"diagram.zoomTitle" = "Mermaid 图";
