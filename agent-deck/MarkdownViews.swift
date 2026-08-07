@@ -2417,12 +2417,15 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
         func appendClosedFence() {
             let body = code.joined(separator: "\n")
             let lang = codeFenceLanguage?.lowercased()
-            switch lang {
-            case "mermaid":
+            // Prefer explicit info-string; body heuristics only when the fence has no
+            // real language (models sometimes omit `mermaid` / `svg` on the fence).
+            let langIsLoose = lang == nil || lang == "text" || lang == "plain" || lang == "txt"
+            if lang == "mermaid" || lang == "mmd" || lang == "mermaidjs"
+                || (langIsLoose && Self.looksLikeMermaid(body)) {
                 appendSimple(.mermaid(body))
-            case "svg":
+            } else if lang == "svg" || (langIsLoose && Self.looksLikeSVG(body)) {
                 appendSimple(.svg(body))
-            default:
+            } else {
                 appendSimple(.code(body))
             }
             code.removeAll()
@@ -2491,6 +2494,38 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
         }
         flushParagraph()
         return blocks.isEmpty ? [.init(id: 0, kind: .paragraph(source))] : blocks
+    }
+
+    /// True when fence body is mermaid even if the info-string was missing/wrong.
+    nonisolated private static func looksLikeMermaid(_ body: String) -> Bool {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        // Skip hash-only / comment-only probes for the first “real” line.
+        let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var sample = ""
+        for line in lines {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.isEmpty { continue }
+            if t.hasPrefix("%%") {
+                if t.lowercased().contains("mermaid-hash") { return true }
+                continue
+            }
+            sample = t.lowercased()
+            break
+        }
+        guard !sample.isEmpty else { return false }
+        let keys = [
+            "flowchart", "graph ", "graph\t", "sequencediagram", "classdiagram",
+            "statediagram", "erdiagram", "gantt", "pie", "mindmap", "timeline",
+            "gitgraph", "journey", "quadrantchart", "sankey", "xychart", "block-beta"
+        ]
+        return keys.contains { sample.hasPrefix($0) || sample.contains($0) }
+    }
+
+    /// True when fence body looks like an SVG document/fragment.
+    nonisolated private static func looksLikeSVG(_ body: String) -> Bool {
+        let t = body.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return t.contains("<svg") || t.hasPrefix("<?xml") && t.contains("<svg")
     }
 
     /// If `lines[index]` is a table header followed by a `|---|` separator, parse

@@ -147,6 +147,8 @@ final class MermaidDiagramEngine: NSObject, WKScriptMessageHandler, WKNavigation
     static let shared = MermaidDiagramEngine()
 
     private var webView: WKWebView?
+    /// Keeps a hidden window so WK actually runs JS (off-hierarchy views can stall).
+    private var hostWindow: NSWindow?
     private var pending: CheckedContinuation<String, Error>?
     private var generation = 0
     private var isDocumentReady = false
@@ -170,6 +172,9 @@ final class MermaidDiagramEngine: NSObject, WKScriptMessageHandler, WKNavigation
         webView?.navigationDelegate = nil
         webView?.stopLoading()
         webView = nil
+        hostWindow?.contentView = nil
+        hostWindow?.close()
+        hostWindow = nil
     }
 
     /// Renders mermaid source to an SVG document string.
@@ -185,7 +190,9 @@ final class MermaidDiagramEngine: NSObject, WKScriptMessageHandler, WKNavigation
             return cached
         }
         let engine = try ensureWebView()
-        await waitUntilDocumentReady()
+        try await waitUntilDocumentReady(timeoutSeconds: 4)
+        // Extra beat after didFinish — mermaid.min.js is large and may still parse.
+        try? await Task.sleep(nanoseconds: 50_000_000)
         generation &+= 1
         let token = generation
         let svg: String = try await withCheckedThrowingContinuation { cont in
@@ -253,11 +260,22 @@ final class MermaidDiagramEngine: NSObject, WKScriptMessageHandler, WKNavigation
         config.userContentController = controller
         config.websiteDataStore = .nonPersistent()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
-        let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 10, height: 10), configuration: config)
+        let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 32, height: 32), configuration: config)
         view.navigationDelegate = self
         view.setValue(false, forKey: "drawsBackground")
-        // Hidden host; rendering is headless via evaluateJavaScript after load.
-        view.isHidden = true
+        // Must live in a window or JS evaluation / didFinish can stall on macOS.
+        let window = NSWindow(
+            contentRect: NSRect(x: -10_000, y: -10_000, width: 32, height: 32),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.alphaValue = 0
+        window.ignoresMouseEvents = true
+        window.contentView = view
+        window.orderBack(nil)
+        hostWindow = window
         isDocumentReady = false
         webView = view
         let html = """
@@ -269,10 +287,28 @@ final class MermaidDiagramEngine: NSObject, WKScriptMessageHandler, WKNavigation
         return view
     }
 
-    private func waitUntilDocumentReady() async {
+    /// Waits for the engine document to finish loading, or fails after `timeoutSeconds`.
+    private func waitUntilDocumentReady(timeoutSeconds: Double) async throws {
         if isDocumentReady { return }
+        let timeoutNanos = UInt64(timeoutSeconds * 1_000_000_000)
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            readyWaiters.append(cont)
+            if self.isDocumentReady {
+                cont.resume()
+                return
+            }
+            self.readyWaiters.append(cont)
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeoutSeconds) { [weak self] in
+                guard let self, !self.isDocumentReady else { return }
+                // Unblock waiters so render can surface a clear error instead of hanging.
+                let waiters = self.readyWaiters
+                self.readyWaiters.removeAll()
+                for w in waiters { w.resume() }
+            }
+        }
+        if !isDocumentReady {
+            // Consume the sleep deadline without unused-variable noise.
+            _ = timeoutNanos
+            throw DiagramRenderError.mermaidFailed("Timed out loading mermaid engine")
         }
     }
 
