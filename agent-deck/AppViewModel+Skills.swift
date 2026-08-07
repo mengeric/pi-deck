@@ -644,8 +644,15 @@ extension AppViewModel {
 
     func parentSkillArguments(for projectURL: URL) throws -> [String] {
         let projectPath = projectURL.standardizedFileURL.path
+        // Product always-on skills ship with the app and attach without Default assignment.
+        // Users can still hide them via disabledBundledSkillNames (Skills UI).
+        var directNames = appSettings.defaultSkillNames.union(projectPreference(for: projectPath).assignedSkillNames)
+        let productSkill = PiDeckDiagramPolicyPrompt.bundledSkillName
+        if !appSettings.disabledBundledSkillNames.contains(productSkill) {
+            directNames.insert(productSkill)
+        }
         let names = effectiveSkillNames(
-            directNames: appSettings.defaultSkillNames.union(projectPreference(for: projectPath).assignedSkillNames),
+            directNames: directNames,
             collectionIDs: appSettings.defaultSkillCollectionIDs.union(projectPreference(for: projectPath).assignedSkillCollectionIDs),
             catalog: skillCatalog(forProjectPath: projectPath)
         )

@@ -112,10 +112,14 @@ extension PiAgentRunnerService {
                     "AGENT_DECK_OPENAI_FAST_CONFIG": PiNativeSubagentBridgeExtensions.openAIFastConfigURL().path
                 ]
             )
-            // Agent Deck parent append prompts (Deck-agent catalog, then memory).
+            // Agent Deck parent append prompts (product policies, Deck-agent catalog, then memory).
             // Collected here and emitted once below so the active APPEND_SYSTEM.md is
             // preserved a single time, regardless of how many features contribute.
             var agentDeckAppendPrompts: [String] = []
+            // Product diagram quality policy: always-on for chat sessions (not optional skill assignment).
+            if PiDeckDiagramPolicyPrompt.shouldAppend(isHelperSession: false) {
+                agentDeckAppendPrompts.append(PiDeckDiagramPolicyPrompt.appendSystemPromptText)
+            }
             // Resolve the session's MCP catalog once so both the bound-agent tool
             // allowlist decision and the append below reuse the same discovery. The
             // provider discovers on demand for sessions in a project other than the

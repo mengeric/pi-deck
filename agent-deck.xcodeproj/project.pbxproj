@@ -48,6 +48,8 @@
 				"bundled-prompts/review-my-changes.md",
 				"bundled-skills/agent-authoring/SKILL.md",
 				"bundled-skills/loop-authoring/SKILL.md",
+				"bundled-skills/mcp-install-helper/SKILL.md",
+				"bundled-skills/professional-mermaid/SKILL.md",
 				"bundled-skills/prompt-authoring/SKILL.md",
 				"bundled-skills/skill-authoring/SKILL.md",
 			);
